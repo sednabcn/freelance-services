@@ -20,3 +20,57 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+#docs
+BACKUP/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+opportunities.json
+business_model_report.md
+*.log
+
+# Secrets (NEVER commit these!)
+.env
+*.pem
+*.key
+config.ini
+secrets.yaml

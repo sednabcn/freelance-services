@@ -1,0 +1,13 @@
+# Freelancer Opportunity Finder - Python Dependencies
+
+# HTTP requests and web scraping
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# Optional: If you want to add more features later
+# selenium>=4.15.0  # For JavaScript-heavy sites
+# scrapy>=2.11.0    # Alternative scraping framework
+# playwright>=1.40.0  # Modern web automation
+
+

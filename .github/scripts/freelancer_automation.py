@@ -67,13 +67,13 @@ class FreelancerConfig:
     # Email settings
     SMTP_HOST = os.getenv('SMTP_HOST', 'smtp.gmail.com')
     SMTP_PORT = int(os.getenv('SMTP_PORT', 587))
-    EMAIL_ADDRESS = os.getenv('FREELANCER_EMAIL', 'your.email@gmail.com')
-    EMAIL_PASSWORD = os.getenv('FREELANCER_EMAIL_PASSWORD', '')
+    EMAIL_ADDRESS = os.getenv('FREELANCER_EMAIL', 'freelancer.automation@gmail.com')
+    EMAIL_PASSWORD = os.getenv('FREELANCER_PASSWORD', '')
     
     # IMAP settings for reading emails from freelancer folder
     IMAP_HOST = os.getenv('IMAP_HOST', 'imap.gmail.com')
     IMAP_PORT = int(os.getenv('IMAP_PORT', 993))
-    IMAP_FOLDER = 'freelancer'  # Gmail label/folder
+    IMAP_FOLDER = 'freelancer_emails'  # Gmail label/folder
     
     # Matching thresholds
     MIN_SKILL_MATCH = 2  # Minimum matching skills
@@ -87,15 +87,15 @@ class FreelancerConfig:
 # ============================================================================
 # EMAIL EXTRACTOR FROM GMAIL FOLDER
 # ============================================================================
-
 class GmailFreelancerExtractor:
     """Extract emails from Gmail freelancer folder"""
     
-    def __init__(self, email_address: str, password: str, folder: str = 'freelancer'):
+    def __init__(self, email_address: str, password: str, folder: str = 'freelancer_emails'):
         self.email_address = email_address
         self.password = password
         self.folder = folder
         self.imap = None
+        self.folder_selected = False  # Track if folder was selected
     
     def connect(self):
         """Connect to Gmail IMAP"""
@@ -124,19 +124,50 @@ class GmailFreelancerExtractor:
                 return []
         
         try:
-            # Select freelancer folder
-            # Gmail uses [Gmail]/Label-Name format
-            status, messages = self.imap.select(f'[Gmail]/{self.folder}')
+            # Try multiple folder name variations
+            folder_attempts = [
+                self.folder,                          # 'freelancer'
+                f'[Gmail]/{self.folder}',            # '[Gmail]/freelancer'
+                f'INBOX.{self.folder}',              # 'INBOX.freelancer'
+                f'INBOX/{self.folder}',              # 'INBOX/freelancer'
+            ]
             
-            if status != 'OK':
-                # Try without [Gmail] prefix
-                status, messages = self.imap.select(self.folder)
+            # Also try listing all folders to help debug
+            print("📁 Available folders:")
+            try:
+                status, folders = self.imap.list()
+                if status == 'OK':
+                    for folder in folders[:10]:  # Show first 10
+                        print(f"   {folder.decode() if isinstance(folder, bytes) else folder}")
+            except Exception as e:
+                print(f"   Could not list folders: {e}")
             
-            if status != 'OK':
+            # Try each folder variation
+            selected = False
+            for folder_name in folder_attempts:
+                try:
+                    status, messages = self.imap.select(f'"{folder_name}"')
+                    if status == 'OK':
+                        print(f"✅ Selected folder: {folder_name}")
+                        self.folder_selected = True
+                        selected = True
+                        break
+                    else:
+                        # Try without quotes
+                        status, messages = self.imap.select(folder_name)
+                        if status == 'OK':
+                            print(f"✅ Selected folder: {folder_name}")
+                            self.folder_selected = True
+                            selected = True
+                            break
+                except Exception as e:
+                    continue
+            
+            if not selected:
                 print(f"❌ Could not select folder: {self.folder}")
+                print(f"   Tried: {', '.join(folder_attempts)}")
+                print(f"   Tip: Create a Gmail label called '{self.folder}' or check the folder list above")
                 return []
-            
-            print(f"✅ Selected folder: {self.folder}")
             
             # Search for emails from last N days
             date_since = (datetime.now() - timedelta(days=days_back)).strftime("%d-%b-%Y")
@@ -318,11 +349,19 @@ class GmailFreelancerExtractor:
     def close(self):
         """Close IMAP connection"""
         if self.imap:
-            self.imap.close()
-            self.imap.logout()
-            print("✅ Disconnected from Gmail")
-
-
+            try:
+                # Only close if folder was selected
+                if self.folder_selected:
+                    self.imap.close()
+                self.imap.logout()
+                print("✅ Disconnected from Gmail")
+            except Exception as e:
+                print(f"⚠️  Error closing IMAP connection: {e}")
+                # Try to logout anyway
+                try:
+                    self.imap.logout()
+                except:
+                    pass
 # ============================================================================
 # FREELANCER PLATFORM SCRAPERS
 # ============================================================================
@@ -485,40 +524,40 @@ class FreelancerProposalSender:
         # Build proposal
         proposal = f"""Hello!
 
-I'm excited about your project: "{title}"
+        I'm excited about your project: "{title}"
 
-RELEVANT EXPERTISE:
-"""
+        RELEVANT EXPERTISE:
+        """
         
         # Add matched services
         for service_name in matched_services:
             service_info = FreelancerConfig.YOUR_SERVICES.get(service_name, {})
             proposal += f"""
-• {service_name}
-  {service_info.get('description', '')}
-  Rate: {service_info.get('rate', 'Negotiable')}
-  Typical Delivery: {service_info.get('delivery', 'Flexible')}
-"""
+            • {service_name}
+            {service_info.get('description', '')}
+            Rate: {service_info.get('rate', 'Negotiable')}
+            Typical Delivery: {service_info.get('delivery', 'Flexible')}
+            """
         
         proposal += f"""
-MATCHING SKILLS:
-{', '.join(matching_skills)}
+        MATCHING SKILLS:
+        {', '.join(matching_skills)}
 
-WHY CHOOSE ME:
-✓ 5+ years of professional experience
-✓ Strong portfolio of successful projects
-✓ Clear communication and regular updates
-✓ Quality code with documentation
-✓ On-time delivery guaranteed
+        WHY CHOOSE ME:
+        ✓ 5+ years of professional experience
+        ✓ Strong portfolio of successful projects
+        ✓ Clear communication and regular updates
+        ✓ Quality code with documentation
+        ✓ On-time delivery guaranteed
 
-I'd love to discuss your project in detail. When would be a good time for a brief call?
+        I'd love to discuss your project in detail. When would be a good time for a brief call?
 
-Best regards,
-[Your Name]
+        Best regards,
+        [Your Name]
 
-Portfolio: [Your Website]
-LinkedIn: [Your LinkedIn]
-"""
+        Portfolio: [Your Website]
+        LinkedIn: [Your LinkedIn]
+        """
         
         return proposal
     
@@ -567,15 +606,15 @@ LinkedIn: [Your LinkedIn]
         """Send daily summary email to yourself"""
         try:
             summary = f"""FREELANCER AUTOMATION DAILY SUMMARY
-Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
-STATISTICS:
-• Total jobs analyzed: {len(matched_jobs)}
-• Proposals sent: {proposals_sent}
-• Daily limit: {FreelancerConfig.MAX_PROPOSALS_PER_DAY}
+            STATISTICS:
+            • Total jobs analyzed: {len(matched_jobs)}
+            • Proposals sent: {proposals_sent}
+            • Daily limit: {FreelancerConfig.MAX_PROPOSALS_PER_DAY}
 
-TOP MATCHES:
-"""
+            TOP MATCHES:
+            """
             
             # Sort by match score
             top_matches = sorted(matched_jobs, 
@@ -584,12 +623,12 @@ TOP MATCHES:
             
             for i, job in enumerate(top_matches, 1):
                 summary += f"""
-{i}. {job.get('title', 'Untitled')}
-   Platform: {job.get('platform', 'Unknown')}
-   Match Score: {job.get('match_score', 0)}%
-   Budget: {job.get('budget', 'Not specified')}
-   URL: {job.get('url', 'N/A')}
-"""
+                {i}. {job.get('title', 'Untitled')}
+                Platform: {job.get('platform', 'Unknown')}
+                Match Score: {job.get('match_score', 0)}%
+                Budget: {job.get('budget', 'Not specified')}
+                URL: {job.get('url', 'N/A')}
+                """
             
             # Send to yourself
             msg = MIMEText(summary, 'plain')

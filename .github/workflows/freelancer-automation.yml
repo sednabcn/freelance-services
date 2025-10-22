@@ -96,6 +96,9 @@ jobs:
         env:
           FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
           FREELANCER_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
+      
         run: |
           echo "Extracting emails from Gmail freelancer folder..."
           
@@ -112,12 +115,7 @@ jobs:
             echo "gmail_jobs_count=0" >> $GITHUB_OUTPUT
             echo "No jobs extracted from Gmail"
           fi
-        env:
-          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
-          FREELANCER_EMAIL_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
-          IMAP_HOST: ${{ secrets.IMAP_HOST }}
-          IMAP_PORT: ${{ secrets.IMAP_PORT }}
-      
+        
       - name: Scrape Freelancer Platforms
         id: scrape
         if: steps.config.outputs.mode == 'scrape' || steps.config.outputs.mode == 'both'

@@ -28,32 +28,39 @@ import sys
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-
 class Config:
-    """Configuration for freelancer opportunity finder"""
+    """Configuration for freelancer opportunity finder - IMPROVED"""
     
     # YOUR PROFILE - CUSTOMIZE THIS!
     YOUR_SKILLS = [
         # Core Programming
-        "Python", "JavaScript", "TypeScript", "Go", "Rust",
+        "Python", "JavaScript", "TypeScript", "Go", "Rust", "Java", "C++", "PHP",
         
         # Web Development
-        "Django", "Flask", "FastAPI", "React", "Vue.js", "Node.js",
+        "Django", "Flask", "FastAPI", "React", "Vue.js", "Vue", "Node.js", "Node",
+        "Angular", "Next.js", "Express", "HTML", "CSS", "Tailwind",
         
         # Data & ML
-        "Machine Learning", "Data Science", "Deep Learning", "NLP",
+        "Machine Learning", "Data Science", "Deep Learning", "NLP", "AI",
         "TensorFlow", "PyTorch", "Scikit-learn", "Pandas", "NumPy",
+        "Data Analysis", "Data Visualization",
         
         # DevOps & Cloud
         "AWS", "Azure", "GCP", "Docker", "Kubernetes", "CI/CD",
-        "Terraform", "GitHub Actions",
+        "Terraform", "GitHub Actions", "Jenkins", "Linux",
         
         # Databases
         "PostgreSQL", "MongoDB", "Redis", "MySQL", "Elasticsearch",
+        "SQL", "NoSQL", "Database",
         
         # Specialized
-        "Web Scraping", "API Development", "Automation", "ETL",
-        "Computer Vision", "Chatbots", "REST APIs", "GraphQL"
+        "Web Scraping", "Scraping", "API Development", "Automation", "ETL",
+        "Computer Vision", "Chatbots", "REST APIs", "REST", "GraphQL",
+        "Testing", "Selenium", "Playwright",
+        
+        # Soft skills that appear in job posts
+        "Backend", "Frontend", "Full Stack", "Development", "Programming",
+        "Software", "Engineer", "Developer"
     ]
     
     # Email configuration
@@ -64,13 +71,13 @@ class Config:
     IMAP_HOST = os.getenv('IMAP_HOST', 'imap.gmail.com')
     IMAP_PORT = int(os.getenv('IMAP_PORT', 993))
     
-    # Matching thresholds
-    MIN_MATCH_SCORE = 60  # Minimum match percentage
-    MIN_BUSINESS_POTENTIAL_SCORE = 70  # For business model identification
+    # IMPROVED MATCHING THRESHOLDS
+    MIN_MATCH_SCORE = 15  # Lower to see more matches (was 60)
+    MIN_BUSINESS_POTENTIAL_SCORE = 40  # Lower threshold (was 70)
     
     # Rate limiting
     DELAY_BETWEEN_REQUESTS = 3
-    MAX_RESULTS_PER_PLATFORM = 30
+    MAX_RESULTS_PER_PLATFORM = 50  # Increased from 30
     
     # Debug mode
     DEBUG = False
@@ -337,38 +344,55 @@ class PlatformScraper:
             'budget': '$200 - $500',
             'source': 'sample'
         }]
-        
+
     def match_to_profile(self, job: Dict) -> Dict:
-        """Calculate match score and identify business potential"""
+        """Calculate match score and identify business potential - IMPROVED"""
         title = job.get('title', '').lower()
         description = job.get('description', '').lower()
         skills = job.get('skills', [])
-        
+    
         full_text = f"{title} {description} {' '.join(skills)}".lower()
-        
+    
         # Calculate skill matches
         matching_skills = []
         for skill in Config.YOUR_SKILLS:
             if skill.lower() in full_text:
                 matching_skills.append(skill)
-        
-        # Calculate match score
-        skill_score = (len(matching_skills) / max(len(Config.YOUR_SKILLS), 1)) * 100
-        
+    
+        # Remove duplicates (e.g., "Python" and "python")
+        matching_skills = list(set(matching_skills))
+    
+        # IMPROVED SCORING: Weight title matches higher
+        title_matches = sum(1 for skill in Config.YOUR_SKILLS if skill.lower() in title)
+        description_matches = len(matching_skills)
+    
+        # Title matches are worth 3x more
+        weighted_matches = (title_matches * 3) + description_matches
+    
+        # Calculate percentage based on weighted matches
+        # Scale: if you match 5 skills with 2 in title, that's (2*3 + 5) = 11 points
+        # Max reasonable score: 15 points = 100%
+        match_score = min(100, (weighted_matches / 15) * 100)
+    
+        # Bonus: If job explicitly lists your skills
+        if skills:
+            skill_list_bonus = len(skills) * 5  # 5% per explicitly listed skill
+            match_score = min(100, match_score + skill_list_bonus)
+    
         # Identify business model potential
         business_potential = self._identify_business_potential(full_text, title)
-        
-        match_score = min(100, skill_score)
-        
-        debug_print(f"Job '{job.get('title', '')[:40]}...' - Match: {match_score:.1f}%, Skills: {len(matching_skills)}")
-        
+    
+        debug_print(f"Job '{job.get('title', '')[:40]}...' - Match: {match_score:.1f}%, "
+                f"Skills: {len(matching_skills)}, Title matches: {title_matches}")
+    
         return {
             'match_score': round(match_score, 2),
             'matching_skills': matching_skills,
+            'title_matches': title_matches,
             'business_potential': business_potential,
             'meets_threshold': match_score >= Config.MIN_MATCH_SCORE
         }
-    
+
     def _identify_business_potential(self, text: str, title: str) -> Dict:
         """Identify if this represents a business model you could offer"""
         

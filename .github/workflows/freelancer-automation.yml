@@ -588,12 +588,12 @@ jobs:
           📥 GMAIL FREELANCER FOLDER:
             Check your ruperto.bonet@modelphysmat.com/freelancer folder for new opportunities.
 
-            💡 TIP: Review matched jobs and send personalized proposals for best results.
+          💡 TIP: Review matched jobs and send personalized proposals for best results.
 
-            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-            View full report: {os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}/actions/runs/{os.getenv('GITHUB_RUN_ID')}
-"""
+          View full report: {os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}/actions/runs/{os.getenv('GITHUB_RUN_ID')}
+          """
           
           # Send email
           email_address = os.getenv('FREELANCER_EMAIL')

@@ -72,7 +72,7 @@ jobs:
           KEYWORDS=$(echo "${{ steps.config.outputs.keywords }}" | tr ',' ' ')
           
           # Run the finder
-          python freelancer_finder.py \
+          python .github/scripts/freelancer_finder.py \
             --days-back ${{ steps.config.outputs.days_back }} \
             --keywords $KEYWORDS \
             --output opportunities.json \
@@ -180,43 +180,43 @@ jobs:
               # Create markdown report
               report = f"""# Business Model Opportunities Report
               
-Generated: {data['generated_at']}
+              Generated: {data['generated_at']}
 
-## Summary
+              ## Summary
 
-- **Total Opportunities Analyzed:** {analysis['total_opportunities']}
-- **Matched to Your Skills:** {analysis['matched_opportunities']}
-- **Business Models Identified:** {len(analysis['business_models'])}
+              - **Total Opportunities Analyzed:** {analysis['total_opportunities']}
+              - **Matched to Your Skills:** {analysis['matched_opportunities']}
+              - **Business Models Identified:** {len(analysis['business_models'])}
 
-## 💼 Business Models You Can Offer as Services
+              ## 💼 Business Models You Can Offer as Services
 
-These are recurring patterns in the marketplace that you could turn into standardized service offerings:
-
-"""
+              These are recurring patterns in the marketplace that you could turn into standardized service offerings:
+                
+              """
               
               for i, model in enumerate(analysis['business_models'], 1):
                   report += f"""
-### {i}. {model['name']}
+                  ### {i}. {model['name']}
 
-**Description:** {model['description']}
+                  **Description:** {model['description']}
 
-**Market Demand:** {model['count']} opportunities found  
-**Average Match Score:** {model['avg_score']}%
+                  **Market Demand:** {model['count']} opportunities found  
+                  **Average Match Score:** {model['avg_score']}%
 
-**Example Projects:**
-"""
+                  **Example Projects:**
+                  """
                   for example in model['examples']:
                       report += f"- [{example['title']}]({example.get('url', '#')}) (Score: {example['score']}%)\n"
                   
                   report += f"""
-**Potential Service Offering:**
-- Create standardized packages (Basic, Standard, Premium)
-- Develop reusable templates and frameworks
-- Offer subscription-based services
-- Build productized consulting
+                  **Potential Service Offering:**
+                  - Create standardized packages (Basic, Standard, Premium)
+                  - Develop reusable templates and frameworks
+                  - Offer subscription-based services
+                  - Build productized consulting
 
----
-"""
+                  ---
+                  """
               
               # Add skills section
               report += "\n## 🔥 Skills Most in Demand\n\n"
@@ -257,17 +257,17 @@ These are recurring patterns in the marketplace that you could turn into standar
               
               # Create stats badge section
               stats = f"""
-## 📊 Latest Scan Results
+              ## 📊 Latest Scan Results
 
-**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
+              **Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
 
-- 🎯 **Opportunities Found:** {analysis['total_opportunities']}
-- ✅ **Matched to Profile:** {analysis['matched_opportunities']}
-- 💼 **Business Models:** {len(analysis['business_models'])}
+              - 🎯 **Opportunities Found:** {analysis['total_opportunities']}
+              - ✅ **Matched to Profile:** {analysis['matched_opportunities']}
+              - 💼 **Business Models:** {len(analysis['business_models'])}
 
-### Top Business Opportunities
+              ### Top Business Opportunities
 
-"""
+              """
               
               for i, model in enumerate(analysis['business_models'][:3], 1):
                   stats += f"{i}. **{model['name']}** - {model['count']} opportunities\n"
@@ -313,10 +313,10 @@ These are recurring patterns in the marketplace that you could turn into standar
           else
             git commit -m "🤖 Update freelancer stats
 
-- Opportunities: ${{ steps.finder.outputs.total_opportunities }}
-- Matched: ${{ steps.finder.outputs.matched_opportunities }}
-- Business Models: ${{ steps.finder.outputs.business_models }}
-- Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            - Opportunities: ${{ steps.finder.outputs.total_opportunities }}
+            - Matched: ${{ steps.finder.outputs.matched_opportunities }}
+            - Business Models: ${{ steps.finder.outputs.business_models }}
+            - Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
             
             git push origin HEAD || echo "⚠️  Could not push changes"
           fi

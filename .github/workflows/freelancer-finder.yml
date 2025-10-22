@@ -24,6 +24,12 @@ on:
         required: false
         default: false
         type: boolean
+      
+      debug:
+        description: 'Enable debug logging'
+        required: false
+        default: true
+        type: boolean
 
 env:
   PYTHON_VERSION: '3.10'
@@ -46,7 +52,57 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml
+          pip install requests beautifulsoup4 lxml feedparser
+      
+      # NEW: Test credentials before running main script
+      - name: Test Gmail Connection
+        run: |
+          python3 << 'EOF'
+          import imaplib
+          import os
+          import sys
+          
+          print("🔐 Testing Gmail authentication...")
+          print(f"📧 Email: {os.getenv('FREELANCER_EMAIL', 'NOT SET')}")
+          print(f"🔑 Password: {'SET' if os.getenv('FREELANCER_PASSWORD') else 'NOT SET'}")
+          print(f"🌐 IMAP Host: {os.getenv('IMAP_HOST', 'imap.gmail.com')}")
+          print(f"🔌 IMAP Port: {os.getenv('IMAP_PORT', '993')}")
+          
+          try:
+              imap = imaplib.IMAP4_SSL(
+                  os.getenv('IMAP_HOST', 'imap.gmail.com'),
+                  int(os.getenv('IMAP_PORT', 993))
+              )
+              imap.login(
+                  os.getenv('FREELANCER_EMAIL', ''),
+                  os.getenv('FREELANCER_PASSWORD', '')
+              )
+              print("✅ Gmail authentication successful!")
+              
+              # Test inbox access
+              imap.select('INBOX')
+              status, messages = imap.search(None, 'ALL')
+              total_emails = len(messages[0].split()) if status == 'OK' else 0
+              print(f"📬 Total emails in inbox: {total_emails}")
+              
+              imap.logout()
+          except imaplib.IMAP4.error as e:
+              print(f"❌ Gmail authentication failed: {e}")
+              print("\n💡 Troubleshooting tips:")
+              print("   1. Use Gmail App Password (not regular password)")
+              print("   2. Enable IMAP in Gmail settings")
+              print("   3. Check if 2FA is enabled (requires App Password)")
+              print("   4. Verify FREELANCER_PASSWORD secret is set correctly")
+              sys.exit(1)
+          except Exception as e:
+              print(f"❌ Connection error: {e}")
+              sys.exit(1)
+          EOF
+        env:
+          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+          FREELANCER_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
       
       - name: Configure Keywords
         id: config
@@ -62,6 +118,12 @@ jobs:
             DAYS="7"
           fi
           echo "days_back=$DAYS" >> $GITHUB_OUTPUT
+          
+          DEBUG="${{ github.event.inputs.debug }}"
+          if [ -z "$DEBUG" ]; then
+            DEBUG="true"
+          fi
+          echo "debug=$DEBUG" >> $GITHUB_OUTPUT
       
       - name: Run Freelancer Opportunity Finder
         id: finder
@@ -71,12 +133,22 @@ jobs:
           # Convert comma-separated keywords to space-separated
           KEYWORDS=$(echo "${{ steps.config.outputs.keywords }}" | tr ',' ' ')
           
-          # Run the finder
-          python .github/scripts/freelancer_finder.py \
+          # Build command with optional debug flag
+          CMD="python .github/scripts/freelancer_finder.py \
             --days-back ${{ steps.config.outputs.days_back }} \
             --keywords $KEYWORDS \
-            --output opportunities.json \
-            ${{ github.event.inputs.skip_email == 'true' && '--skip-email' || '' }}
+            --output opportunities.json"
+          
+          if [ "${{ steps.config.outputs.debug }}" = "true" ]; then
+            CMD="$CMD --debug"
+          fi
+          
+          if [ "${{ github.event.inputs.skip_email }}" = "true" ]; then
+            CMD="$CMD --skip-email"
+          fi
+          
+          # Run the finder
+          eval $CMD
           
           # Extract statistics
           if [ -f opportunities.json ]; then
@@ -89,6 +161,11 @@ jobs:
             echo "business_models=$MODELS" >> $GITHUB_OUTPUT
             
             echo "✅ Found $TOTAL opportunities, $MATCHED matched, $MODELS business models"
+          else
+            echo "⚠️  opportunities.json not created"
+            echo "total_opportunities=0" >> $GITHUB_OUTPUT
+            echo "matched_opportunities=0" >> $GITHUB_OUTPUT
+            echo "business_models=0" >> $GITHUB_OUTPUT
           fi
         env:
           FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
@@ -153,18 +230,24 @@ jobs:
               
               print("\n" + "="*80)
               
+          except FileNotFoundError:
+              print("❌ opportunities.json not found - no data to report")
           except Exception as e:
               print(f"❌ Error generating report: {e}")
           EOF
       
       - name: Upload Opportunities
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: freelance-opportunities
-          path: opportunities.json
+          path: |
+            opportunities.json
+            *.log
           retention-days: 30
       
       - name: Create Business Model Report
+        if: success()
         run: |
           echo "📋 Creating business model report..."
           
@@ -234,6 +317,7 @@ jobs:
           EOF
       
       - name: Upload Business Model Report
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: business-model-report

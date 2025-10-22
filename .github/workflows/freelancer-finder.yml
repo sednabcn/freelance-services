@@ -1,4 +1,4 @@
-name: Freelancer Opportunity Finder
+name: Freelancer xwOpportunity Finder
 
 on:
   schedule:
@@ -153,7 +153,7 @@ jobs:
           # Extract statistics with better error handling
           if [ -f opportunities.json ]; then
             echo "📄 Checking JSON structure..."
-            python3 -c "import json; print(json.dumps(json.load(open('opportunities.json')).keys(), indent=2))"
+            python3 -c "import json; print(json.dumps(list(json.load(open('opportunities.json')).keys()), indent=2))"
             
             # Try to extract stats, but handle missing keys gracefully
             python3 << 'PYEOF' >> $GITHUB_OUTPUT
@@ -330,7 +330,7 @@ jobs:
               - **Total Opportunities Analyzed:** {analysis.get('total_opportunities', 0)}
               - **Matched to Your Skills:** {analysis.get('matched_opportunities', 0)}
               - **Business Models Identified:** {len(analysis.get('business_models', []))}
-
+              
               """
               
               business_models = analysis.get('business_models', [])
@@ -352,15 +352,15 @@ jobs:
                           report += f"- [{example['title']}]({example.get('url', '#')}) (Score: {example.get('score', 0)}%)\n"
                       
                       report += """
-                      **Potential Service Offering:**
-                      - Create standardized packages (Basic, Standard, Premium)
-                      - Develop reusable templates and frameworks
-                      - Offer subscription-based services
-                      - Build productized consulting
+**Potential Service Offering:**
+- Create standardized packages (Basic, Standard, Premium)
+- Develop reusable templates and frameworks
+- Offer subscription-based services
+- Build productized consulting
 
-                      ---
+---
 
-                      """
+"""
               else:
                   report += "## 💼 No Business Models Identified Yet\n\n"
                   report += "Run the finder with more opportunities to identify patterns.\n\n"

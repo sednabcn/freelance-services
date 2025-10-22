@@ -41,6 +41,50 @@ on:
         default: 10
         type: number
 
+    
+name: Freelancer Platform Automation
+
+on:
+  schedule:
+    # Run twice daily at 9 AM and 5 PM UTC
+    - cron: '0 9,17 * * *'
+  
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Automation mode'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - gmail
+          - scrape
+          - both
+      
+      send_proposals:
+        description: 'Actually send proposals (not dry-run)'
+        required: true
+        default: false
+        type: boolean
+      
+      keywords:
+        description: 'Search keywords (comma-separated)'
+        required: true
+        default: 'python,automation,web scraping,api,machine learning'
+        type: string
+      
+      days_back:
+        description: 'Days back to search Gmail folder'
+        required: true
+        default: 7
+        type: number
+      
+      max_proposals:
+        description: 'Max proposals to send per run'
+        required: true
+        default: 10
+        type: number
+
 env:
   PYTHON_VERSION: '3.10'
   TIMEZONE: 'Europe/London'
@@ -325,21 +369,21 @@ jobs:
                   I'm excited about your project: "{job.get('title', 'your project')}"
 
                   RELEVANT SERVICES:
-                  """
+                    """
                   for service in job.get('matched_services', []):
-                      proposal += f"  • {service}\n"
+                      proposal += f"• {service}\n"
                   
                   proposal += f"""
                   MATCHING SKILLS:
-                    {', '.join(job.get('matching_skills', []))}
+                  {', '.join(job.get('matching_skills', []))}
 
-                    WHY CHOOSE ME:
+                  WHY CHOOSE ME:
                       ✓ 5+ years of professional experience
                       ✓ Strong portfolio of successful projects
                       ✓ Clear communication and regular updates
                       ✓ Quality code with documentation
                       ✓ On-time delivery guaranteed
-                      
+
                   I'd love to discuss your project in detail.
 
                   Best regards,
@@ -513,14 +557,14 @@ jobs:
             • Matched jobs (≥60%): {matched}
             • Proposals sent this run: {os.getenv('PROPOSALS_SENT', 0)}
 
-         📈 OVERALL STATISTICS:
-           • Total proposals sent: {stats.get('total_sent', 0)}
-           • Total responses: {stats.get('total_responses', 0)}
-           • Total accepted: {stats.get('total_accepted', 0)}
-           • Response rate: {stats.get('response_rate', 0)}%
-           • Acceptance rate: {stats.get('acceptance_rate', 0)}%
+          📈 OVERALL STATISTICS:
+            • Total proposals sent: {stats.get('total_sent', 0)}
+            • Total responses: {stats.get('total_responses', 0)}
+            • Total accepted: {stats.get('total_accepted', 0)}
+            • Response rate: {stats.get('response_rate', 0)}%
+            • Acceptance rate: {stats.get('acceptance_rate', 0)}%
 
-           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
           🎯 TOP 5 MATCHES TODAY:
           """
@@ -539,15 +583,15 @@ jobs:
               if job.get('url'):
                   summary += f"   URL: {job.get('url')}\n"
           
-              summary += f"""
-              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          summary += f"""
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-              📥 GMAIL FREELANCER FOLDER:
-              Check your ruperto.bonet@modelphysmat.com/freelancer folder for new opportunities.
+          📥 GMAIL FREELANCER FOLDER:
+            Check your ruperto.bonet@modelphysmat.com/freelancer folder for new opportunities.
 
-              💡 TIP: Review matched jobs and send personalized proposals for best results.
+          💡 TIP: Review matched jobs and send personalized proposals for best results.
 
-              ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
           View full report: {os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}/actions/runs/{os.getenv('GITHUB_RUN_ID')}
           """

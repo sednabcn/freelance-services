@@ -427,11 +427,18 @@ yamlkeywords:
   default: 'python,javascript,automation,api,machine learning,data science'
 Email to Different Address
 Keep notifications separate from scraping account:
-python# In freelancer_finder.py, modify send_notification():
-notification_email = "your-notifications@gmail.com"  # Different from FREELANCER_EMAIL
+python#
+In freelancer_finder.py, modify send_notification():
+notification_email = "your-notifications@gmail.com"
+
+# Different from FREELANCER_EMAIL
+
 Save to Google Sheets
+
 Add this after line 800 in freelancer_finder.py:
-pythonimport gspread
+python
+
+import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 def save_to_sheets(opportunities):
@@ -448,21 +455,13 @@ def save_to_sheets(opportunities):
             opp['match_score'],
             opp['url']
         ])
-Slack Notifications
-Install slack-sdk and add:
-pythonfrom slack_sdk import WebClient
 
-def notify_slack(opportunities):
-    client = WebClient(token=os.getenv('SLACK_TOKEN'))
-    
-    message = f"Found {len(opportunities)} new opportunities!"
-    for opp in opportunities[:5]:
-        message += f"\n• {opp['title']} ({opp['match_score']}%)"
-    
-    client.chat_postMessage(channel='#jobs', text=message)
 Database Storage
+
 Save to PostgreSQL:
-pythonimport psycopg2
+python
+
+import psycopg2
 
 def save_to_database(opportunities):
     conn = psycopg2.connect(os.getenv('DATABASE_URL'))
@@ -479,6 +478,22 @@ def save_to_database(opportunities):
     cur.close()
     conn.close()
 
+
+Slack Notifications
+Install slack-sdk and add:
+python
+
+from slack_sdk import WebClient
+
+def notify_slack(opportunities):
+    client = WebClient(token=os.getenv('SLACK_TOKEN'))
+    
+    message = f"Found {len(opportunities)} new opportunities!"
+    for opp in opportunities[:5]:
+        message += f"\n• {opp['title']} ({opp['match_score']}%)"
+    
+    client.chat_postMessage(channel='#jobs', text=message)
+    
 ✅ Post-Setup Checklist
 After completing setup:
 

@@ -24,7 +24,12 @@ import argparse
 import re
 from collections import Counter
 import sys
-
+import psycopg2
+from psycopg2.extras import execute_values
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import sqlite3
+from datetime import datetime
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
@@ -1067,6 +1072,545 @@ around the identified business models.
 
 
 # ============================================================================
+# GOOGLE SHEETS INTEGRATION
+# ============================================================================
+
+class GoogleSheetsStorage:
+    """Save opportunities to Google Sheets"""
+    
+    def __init__(self, credentials_file: str = 'credentials.json', 
+                 spreadsheet_name: str = 'Freelance Opportunities'):
+        """
+        Initialize Google Sheets connection
+        
+        Setup instructions:
+        1. Go to Google Cloud Console (console.cloud.google.com)
+        2. Create a project
+        3. Enable Google Sheets API
+        4. Create Service Account credentials
+        5. Download JSON key as 'credentials.json'
+        6. Share your spreadsheet with the service account email
+        """
+        self.credentials_file = credentials_file
+        self.spreadsheet_name = spreadsheet_name
+        self.client = None
+        self.sheet = None
+    
+    def connect(self) -> bool:
+        """Connect to Google Sheets"""
+        try:
+            scope = [
+                'https://spreadsheets.google.com/feeds',
+                'https://www.googleapis.com/auth/drive'
+            ]
+            creds = ServiceAccountCredentials.from_json_keyfile_name(
+                self.credentials_file, scope
+            )
+            self.client = gspread.authorize(creds)
+            
+            # Try to open existing spreadsheet, create if doesn't exist
+            try:
+                self.sheet = self.client.open(self.spreadsheet_name).sheet1
+            except gspread.SpreadsheetNotFound:
+                spreadsheet = self.client.create(self.spreadsheet_name)
+                self.sheet = spreadsheet.sheet1
+                self._setup_headers()
+            
+            print(f"✅ Connected to Google Sheets: {self.spreadsheet_name}")
+            return True
+            
+        except FileNotFoundError:
+            print(f"❌ Credentials file not found: {self.credentials_file}")
+            print("   Create credentials at: https://console.cloud.google.com")
+            return False
+        except Exception as e:
+            print(f"❌ Google Sheets connection failed: {e}")
+            return False
+    
+    def _setup_headers(self):
+        """Setup spreadsheet headers"""
+        headers = [
+            'Timestamp', 'Title', 'Platform', 'Budget', 
+            'Match Score', 'Matching Skills', 'URL', 'Source',
+            'Business Model', 'Description Preview'
+        ]
+        self.sheet.append_row(headers)
+        # Format header row
+        self.sheet.format('A1:J1', {
+            'textFormat': {'bold': True},
+            'backgroundColor': {'red': 0.4, 'green': 0.5, 'blue': 0.9}
+        })
+    
+    def save_opportunities(self, opportunities: List[Dict]) -> bool:
+        """Save opportunities to Google Sheets"""
+        if not self.sheet and not self.connect():
+            return False
+        
+        try:
+            rows = []
+            for opp in opportunities:
+                # Only save matched opportunities
+                if not opp.get('meets_threshold', False):
+                    continue
+                
+                business_model = ''
+                if opp.get('business_potential', {}).get('best_model'):
+                    business_model = opp['business_potential']['best_model']['name']
+                
+                row = [
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    opp.get('title', 'N/A')[:200],  # Truncate long titles
+                    opp.get('platform', 'unknown').upper(),
+                    opp.get('budget', 'Not specified'),
+                    f"{opp.get('match_score', 0):.1f}%",
+                    ', '.join(opp.get('matching_skills', [])[:5]),
+                    opp.get('url', 'N/A'),
+                    opp.get('source', 'unknown'),
+                    business_model,
+                    opp.get('description', '')[:100]  # Preview
+                ]
+                rows.append(row)
+            
+            if rows:
+                self.sheet.append_rows(rows)
+                print(f"✅ Saved {len(rows)} opportunities to Google Sheets")
+                return True
+            else:
+                print("ℹ️ No matched opportunities to save")
+                return True
+                
+        except Exception as e:
+            print(f"❌ Failed to save to Google Sheets: {e}")
+            return False
+    
+    def get_spreadsheet_url(self) -> str:
+        """Get the URL of the spreadsheet"""
+        if self.sheet:
+            return f"https://docs.google.com/spreadsheets/d/{self.sheet.spreadsheet.id}"
+        return ""
+
+
+# ============================================================================
+# POSTGRESQL DATABASE INTEGRATION
+# ============================================================================
+
+class PostgreSQLStorage:
+    """Save opportunities to PostgreSQL database"""
+    
+    def __init__(self, database_url: str = None):
+        """
+        Initialize PostgreSQL connection
+        
+        Database URL format:
+        postgresql://user:password@host:port/database
+        
+        Or set environment variable: DATABASE_URL
+        """
+        self.database_url = database_url or os.getenv('DATABASE_URL')
+        self.conn = None
+    
+    def connect(self) -> bool:
+        """Connect to PostgreSQL"""
+        if not self.database_url:
+            print("❌ PostgreSQL DATABASE_URL not configured")
+            print("   Set environment variable: export DATABASE_URL='postgresql://...'")
+            return False
+        
+        try:
+            self.conn = psycopg2.connect(self.database_url)
+            print("✅ Connected to PostgreSQL database")
+            self._create_tables()
+            return True
+            
+        except Exception as e:
+            print(f"❌ PostgreSQL connection failed: {e}")
+            return False
+    
+    def _create_tables(self):
+        """Create tables if they don't exist"""
+        with self.conn.cursor() as cur:
+            # Main opportunities table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS opportunities (
+                    id SERIAL PRIMARY KEY,
+                    external_id VARCHAR(255) UNIQUE,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    platform VARCHAR(50),
+                    url TEXT,
+                    budget VARCHAR(100),
+                    match_score DECIMAL(5,2),
+                    source VARCHAR(50),
+                    posted_date TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            
+            # Skills junction table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS opportunity_skills (
+                    opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE CASCADE,
+                    skill VARCHAR(100),
+                    PRIMARY KEY (opportunity_id, skill)
+                )
+            """)
+            
+            # Business models table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS opportunity_business_models (
+                    opportunity_id INTEGER REFERENCES opportunities(id) ON DELETE CASCADE,
+                    model_name VARCHAR(100),
+                    model_score DECIMAL(5,2),
+                    PRIMARY KEY (opportunity_id, model_name)
+                )
+            """)
+            
+            # Create indexes for better query performance
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_opportunities_platform 
+                ON opportunities(platform)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_opportunities_match_score 
+                ON opportunities(match_score DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_opportunities_created_at 
+                ON opportunities(created_at DESC)
+            """)
+            
+            self.conn.commit()
+    
+    def save_opportunities(self, opportunities: List[Dict]) -> bool:
+        """Save opportunities to database"""
+        if not self.conn and not self.connect():
+            return False
+        
+        try:
+            with self.conn.cursor() as cur:
+                saved_count = 0
+                
+                for opp in opportunities:
+                    # Insert opportunity (or update if exists)
+                    cur.execute("""
+                        INSERT INTO opportunities 
+                        (external_id, title, description, platform, url, budget, 
+                         match_score, source, posted_date)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (external_id) 
+                        DO UPDATE SET
+                            match_score = EXCLUDED.match_score,
+                            updated_at = CURRENT_TIMESTAMP
+                        RETURNING id
+                    """, (
+                        opp.get('id'),
+                        opp.get('title', 'N/A'),
+                        opp.get('description', ''),
+                        opp.get('platform', 'unknown'),
+                        opp.get('url'),
+                        opp.get('budget'),
+                        opp.get('match_score', 0),
+                        opp.get('source', 'unknown'),
+                        opp.get('posted_date')
+                    ))
+                    
+                    opportunity_id = cur.fetchone()[0]
+                    
+                    # Insert skills
+                    if opp.get('matching_skills'):
+                        skills_data = [
+                            (opportunity_id, skill) 
+                            for skill in opp['matching_skills']
+                        ]
+                        execute_values(
+                            cur,
+                            """
+                            INSERT INTO opportunity_skills (opportunity_id, skill)
+                            VALUES %s
+                            ON CONFLICT DO NOTHING
+                            """,
+                            skills_data
+                        )
+                    
+                    # Insert business models
+                    if opp.get('business_potential', {}).get('models'):
+                        models_data = [
+                            (opportunity_id, model['name'], model['score'])
+                            for model in opp['business_potential']['models']
+                        ]
+                        execute_values(
+                            cur,
+                            """
+                            INSERT INTO opportunity_business_models 
+                            (opportunity_id, model_name, model_score)
+                            VALUES %s
+                            ON CONFLICT DO NOTHING
+                            """,
+                            models_data
+                        )
+                    
+                    saved_count += 1
+                
+                self.conn.commit()
+                print(f"✅ Saved {saved_count} opportunities to PostgreSQL")
+                return True
+                
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ Failed to save to PostgreSQL: {e}")
+            return False
+    
+    def get_top_opportunities(self, limit: int = 10) -> List[Dict]:
+        """Retrieve top opportunities from database"""
+        if not self.conn:
+            return []
+        
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT 
+                    o.title, o.platform, o.budget, o.match_score, 
+                    o.url, o.created_at,
+                    ARRAY_AGG(DISTINCT os.skill) as skills
+                FROM opportunities o
+                LEFT JOIN opportunity_skills os ON o.id = os.opportunity_id
+                GROUP BY o.id
+                ORDER BY o.match_score DESC, o.created_at DESC
+                LIMIT %s
+            """, (limit,))
+            
+            results = []
+            for row in cur.fetchall():
+                results.append({
+                    'title': row[0],
+                    'platform': row[1],
+                    'budget': row[2],
+                    'match_score': float(row[3]),
+                    'url': row[4],
+                    'created_at': row[5],
+                    'skills': row[6] if row[6] else []
+                })
+            
+            return results
+    
+    def close(self):
+        """Close database connection"""
+        if self.conn:
+            self.conn.close()
+
+
+# ============================================================================
+# SQLITE LOCAL DATABASE
+# ============================================================================
+
+class SQLiteStorage:
+    """Save opportunities to local SQLite database (no setup required)"""
+    
+    def __init__(self, db_path: str = 'freelance_opportunities.db'):
+        """Initialize SQLite connection"""
+        self.db_path = db_path
+        self.conn = None
+    
+    def connect(self) -> bool:
+        """Connect to SQLite"""
+        try:
+            self.conn = sqlite3.connect(self.db_path)
+            self.conn.row_factory = sqlite3.Row
+            print(f"✅ Connected to SQLite database: {self.db_path}")
+            self._create_tables()
+            return True
+            
+        except Exception as e:
+            print(f"❌ SQLite connection failed: {e}")
+            return False
+    
+    def _create_tables(self):
+        """Create tables if they don't exist"""
+        cur = self.conn.cursor()
+        
+        # Main opportunities table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS opportunities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                external_id TEXT UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT,
+                platform TEXT,
+                url TEXT,
+                budget TEXT,
+                match_score REAL,
+                source TEXT,
+                posted_date TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Skills table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS opportunity_skills (
+                opportunity_id INTEGER,
+                skill TEXT,
+                PRIMARY KEY (opportunity_id, skill),
+                FOREIGN KEY (opportunity_id) REFERENCES opportunities(id)
+            )
+        """)
+        
+        # Create indexes
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS idx_match_score 
+            ON opportunities(match_score DESC)
+        """)
+        
+        self.conn.commit()
+    
+    def save_opportunities(self, opportunities: List[Dict]) -> bool:
+        """Save opportunities to SQLite"""
+        if not self.conn and not self.connect():
+            return False
+        
+        try:
+            cur = self.conn.cursor()
+            saved_count = 0
+            
+            for opp in opportunities:
+                # Insert or replace opportunity
+                cur.execute("""
+                    INSERT OR REPLACE INTO opportunities 
+                    (external_id, title, description, platform, url, budget, 
+                     match_score, source, posted_date)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    opp.get('id'),
+                    opp.get('title', 'N/A'),
+                    opp.get('description', ''),
+                    opp.get('platform', 'unknown'),
+                    opp.get('url'),
+                    opp.get('budget'),
+                    opp.get('match_score', 0),
+                    opp.get('source', 'unknown'),
+                    opp.get('posted_date')
+                ))
+                
+                opportunity_id = cur.lastrowid
+                
+                # Insert skills
+                if opp.get('matching_skills'):
+                    for skill in opp['matching_skills']:
+                        cur.execute("""
+                            INSERT OR IGNORE INTO opportunity_skills 
+                            (opportunity_id, skill)
+                            VALUES (?, ?)
+                        """, (opportunity_id, skill))
+                
+                saved_count += 1
+            
+            self.conn.commit()
+            print(f"✅ Saved {saved_count} opportunities to SQLite")
+            return True
+            
+        except Exception as e:
+            self.conn.rollback()
+            print(f"❌ Failed to save to SQLite: {e}")
+            return False
+    
+    def get_stats(self) -> Dict:
+        """Get database statistics"""
+        if not self.conn:
+            return {}
+        
+        cur = self.conn.cursor()
+        
+        stats = {}
+        
+        # Total opportunities
+        cur.execute("SELECT COUNT(*) FROM opportunities")
+        stats['total_opportunities'] = cur.fetchone()[0]
+        
+        # Opportunities by platform
+        cur.execute("""
+            SELECT platform, COUNT(*) 
+            FROM opportunities 
+            GROUP BY platform
+        """)
+        stats['by_platform'] = dict(cur.fetchall())
+        
+        # Average match score
+        cur.execute("SELECT AVG(match_score) FROM opportunities")
+        stats['avg_match_score'] = cur.fetchone()[0] or 0
+        
+        # Top skills
+        cur.execute("""
+            SELECT skill, COUNT(*) as count
+            FROM opportunity_skills
+            GROUP BY skill
+            ORDER BY count DESC
+            LIMIT 10
+        """)
+        stats['top_skills'] = dict(cur.fetchall())
+        
+        return stats
+    
+    def close(self):
+        """Close database connection"""
+        if self.conn:
+            self.conn.close()
+
+
+# ============================================================================
+# USAGE EXAMPLE - ADD TO YOUR main() FUNCTION
+# ============================================================================
+
+def save_to_all_storage(opportunities: List[Dict], args):
+    """
+    Save opportunities to all configured storage systems
+    Add this function call in your main() after analysis
+    """
+    
+    # 1. SQLite (always available, no setup)
+    sqlite_storage = SQLiteStorage()
+    if sqlite_storage.connect():
+        sqlite_storage.save_opportunities(opportunities)
+        
+        # Print stats
+        stats = sqlite_storage.get_stats()
+        print(f"\n📊 SQLite Stats:")
+        print(f"   Total stored: {stats.get('total_opportunities', 0)}")
+        print(f"   Avg match: {stats.get('avg_match_score', 0):.1f}%")
+        
+        sqlite_storage.close()
+    
+    # 2. Google Sheets (requires credentials.json)
+    if os.path.exists('credentials.json'):
+        sheets_storage = GoogleSheetsStorage()
+        if sheets_storage.connect():
+            sheets_storage.save_opportunities(opportunities)
+            url = sheets_storage.get_spreadsheet_url()
+            if url:
+                print(f"📊 View in Google Sheets: {url}")
+    else:
+        print("\nℹ️  Google Sheets: Add 'credentials.json' to enable")
+        print("   Instructions: https://console.cloud.google.com")
+    
+    # 3. PostgreSQL (requires DATABASE_URL)
+    if os.getenv('DATABASE_URL'):
+        pg_storage = PostgreSQLStorage()
+        if pg_storage.connect():
+            pg_storage.save_opportunities(opportunities)
+            
+            # Show top opportunities from database
+            top_opps = pg_storage.get_top_opportunities(5)
+            if top_opps:
+                print("\n🏆 Top 5 from database:")
+                for i, opp in enumerate(top_opps, 1):
+                    print(f"   {i}. {opp['title'][:50]}... ({opp['match_score']:.1f}%)")
+            
+            pg_storage.close()
+    else:
+        print("\nℹ️  PostgreSQL: Set DATABASE_URL to enable")
+        print("   Example: export DATABASE_URL='postgresql://user:pass@host/db'")
+
+
+# ============================================================================
 # MAIN WORKFLOW
 # ============================================================================
 
@@ -1172,7 +1716,9 @@ def main():
 
     print("\n🎯 Done! Review your opportunities and consider recurring business models.\n")
     
-
+    # Save to all configured storage systems
+    save_to_all_storage(enriched_jobs, args)
+    
 if __name__ == '__main__':
     try:
         main()

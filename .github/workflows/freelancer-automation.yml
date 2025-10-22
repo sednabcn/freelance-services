@@ -1,0 +1,640 @@
+name: Freelancer Platform Automation
+
+on:
+  schedule:
+    # Run twice daily at 9 AM and 5 PM UTC
+    - cron: '0 9,17 * * *'
+  
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Automation mode'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - gmail
+          - scrape
+          - both
+      
+      send_proposals:
+        description: 'Actually send proposals (not dry-run)'
+        required: true
+        default: false
+        type: boolean
+      
+      keywords:
+        description: 'Search keywords (comma-separated)'
+        required: true
+        default: 'python,automation,web scraping,api,machine learning'
+        type: string
+      
+      days_back:
+        description: 'Days back to search Gmail folder'
+        required: true
+        default: 7
+        type: number
+      
+      max_proposals:
+        description: 'Max proposals to send per run'
+        required: true
+        default: 10
+        type: number
+
+name: Freelancer Platform Automation
+
+on:
+  schedule:
+    # Run twice daily at 9 AM and 5 PM UTC
+    - cron: '0 9,17 * * *'
+  
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Automation mode'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - gmail
+          - scrape
+          - both
+      
+      send_proposals:
+        description: 'Actually send proposals (not dry-run)'
+        required: true
+        default: false
+        type: boolean
+      
+      keywords:
+        description: 'Search keywords (comma-separated)'
+        required: true
+        default: 'python,automation,web scraping,api,machine learning'
+        type: string
+      
+      days_back:
+        description: 'Days back to search Gmail folder'
+        required: true
+        default: 7
+        type: number
+      
+      max_proposals:
+        description: 'Max proposals to send per run'
+        required: true
+        default: 10
+        type: number
+
+env:
+  PYTHON_VERSION: '3.10'
+  TIMEZONE: 'Europe/London'
+
+jobs:
+  # ========================================
+  # JOB 1: EXTRACT & MATCH FREELANCE OPPORTUNITIES
+  # ========================================
+  extract-and-match:
+    name: Extract & Match Freelance Jobs
+    runs-on: ubuntu-latest
+    outputs:
+      matched_jobs_count: ${{ steps.match.outputs.matched_count }}
+      total_jobs_count: ${{ steps.match.outputs.total_count }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml pyyaml
+      
+      - name: Configure Inputs
+        id: config
+        run: |
+          # Set mode
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then
+            MODE="both"
+          fi
+          echo "mode=$MODE" >> $GITHUB_OUTPUT
+          
+          # Set send_proposals flag
+          SEND="${{ github.event.inputs.send_proposals }}"
+          if [ -z "$SEND" ]; then
+            SEND="false"
+          fi
+          echo "send_proposals=$SEND" >> $GITHUB_OUTPUT
+          
+          # Parse keywords
+          KEYWORDS="${{ github.event.inputs.keywords }}"
+          if [ -z "$KEYWORDS" ]; then
+            KEYWORDS="python,automation,web scraping,api,machine learning"
+          fi
+          echo "keywords=$KEYWORDS" >> $GITHUB_OUTPUT
+          
+          # Set days back
+          DAYS="${{ github.event.inputs.days_back }}"
+          if [ -z "$DAYS" ]; then
+            DAYS="7"
+          fi
+          echo "days_back=$DAYS" >> $GITHUB_OUTPUT
+      
+      - name: Extract from Gmail Freelancer Folder
+        id: gmail
+        if: steps.config.outputs.mode == 'gmail' || steps.config.outputs.mode == 'both'
+        run: |
+          echo "📧 Extracting emails from Gmail freelancer folder..."
+          
+          python .github/scripts/freelancer_automation.py \
+            --mode gmail \
+            --days-back ${{ steps.config.outputs.days_back }} \
+            --output gmail_freelancer_jobs.json
+          
+          if [ -f gmail_freelancer_jobs.json ]; then
+            COUNT=$(python3 -c "import json; data=json.load(open('gmail_freelancer_jobs.json')); print(len(data.get('jobs', [])))")
+            echo "gmail_jobs_count=$COUNT" >> $GITHUB_OUTPUT
+            echo "✅ Extracted $COUNT jobs from Gmail"
+          else
+            echo "gmail_jobs_count=0" >> $GITHUB_OUTPUT
+            echo "⚠️  No jobs extracted from Gmail"
+          fi
+        env:
+          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+          FREELANCER_EMAIL_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_PORT: ${{ secrets.IMAP_PORT }}
+      
+      - name: Scrape Freelancer Platforms
+        id: scrape
+        if: steps.config.outputs.mode == 'scrape' || steps.config.outputs.mode == 'both'
+        run: |
+          echo "🔍 Scraping freelancer platforms..."
+          
+          # Convert comma-separated keywords to space-separated
+          KEYWORDS=$(echo "${{ steps.config.outputs.keywords }}" | tr ',' ' ')
+          
+          python .github/scripts/freelancer_automation.py \
+            --mode scrape \
+            --keywords $KEYWORDS \
+            --output scraped_freelancer_jobs.json
+          
+          if [ -f scraped_freelancer_jobs.json ]; then
+            COUNT=$(python3 -c "import json; data=json.load(open('scraped_freelancer_jobs.json')); print(len(data.get('jobs', [])))")
+            echo "scraped_jobs_count=$COUNT" >> $GITHUB_OUTPUT
+            echo "✅ Scraped $COUNT jobs"
+          else
+            echo "scraped_jobs_count=0" >> $GITHUB_OUTPUT
+            echo "⚠️  No jobs scraped"
+          fi
+        env:
+          UPWORK_API_KEY: ${{ secrets.UPWORK_API_KEY }}
+          FREELANCER_API_KEY: ${{ secrets.FREELANCER_API_KEY }}
+      
+      - name: Match Jobs to Profile
+        id: match
+        run: |
+          echo "🎯 Matching jobs to your profile..."
+          
+          # Combine results if both modes ran
+          python3 << 'EOF'
+          import json
+          import os
+          
+          all_jobs = []
+          
+          # Load Gmail jobs
+          if os.path.exists('gmail_freelancer_jobs.json'):
+              with open('gmail_freelancer_jobs.json', 'r') as f:
+                  data = json.load(f)
+                  all_jobs.extend(data.get('jobs', []))
+          
+          # Load scraped jobs
+          if os.path.exists('scraped_freelancer_jobs.json'):
+              with open('scraped_freelancer_jobs.json', 'r') as f:
+                  data = json.load(f)
+                  all_jobs.extend(data.get('jobs', []))
+          
+          # Filter matched jobs (score >= 60)
+          matched_jobs = [j for j in all_jobs if j.get('match_score', 0) >= 60]
+          
+          # Save combined results
+          output = {
+              'total_jobs': len(all_jobs),
+              'matched_jobs': len(matched_jobs),
+              'jobs': matched_jobs
+          }
+          
+          with open('matched_freelancer_jobs.json', 'w') as f:
+              json.dump(output, f, indent=2)
+          
+          print(f"Total jobs: {len(all_jobs)}")
+          print(f"Matched jobs: {len(matched_jobs)}")
+          
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"total_count={len(all_jobs)}\n")
+              f.write(f"matched_count={len(matched_jobs)}\n")
+          EOF
+      
+      - name: Generate Match Report
+        run: |
+          echo "📊 Generating match report..."
+          
+          python3 << 'EOF'
+          import json
+          
+          with open('matched_freelancer_jobs.json', 'r') as f:
+              data = json.load(f)
+          
+          jobs = data.get('jobs', [])
+          
+          print("\n" + "="*80)
+          print("FREELANCER JOB MATCHING REPORT")
+          print("="*80)
+          print(f"\nTotal Jobs Analyzed: {data.get('total_jobs', 0)}")
+          print(f"Matched Jobs (≥60% score): {data.get('matched_jobs', 0)}")
+          
+          if jobs:
+              print("\n" + "-"*80)
+              print("TOP 10 MATCHES:")
+              print("-"*80)
+              
+              # Sort by score
+              sorted_jobs = sorted(jobs, key=lambda x: x.get('match_score', 0), reverse=True)
+              
+              for i, job in enumerate(sorted_jobs[:10], 1):
+                  print(f"\n{i}. {job.get('title', 'Untitled')[:70]}")
+                  print(f"   Platform: {job.get('platform', 'Unknown')}")
+                  print(f"   Match Score: {job.get('match_score', 0)}%")
+                  print(f"   Budget: {job.get('budget', 'Not specified')}")
+                  print(f"   Skills: {', '.join(job.get('matching_skills', [])[:5])}")
+                  if job.get('url'):
+                      print(f"   URL: {job.get('url')}")
+          
+          print("\n" + "="*80)
+          EOF
+      
+      - name: Upload Matched Jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: matched-freelancer-jobs
+          path: matched_freelancer_jobs.json
+          retention-days: 30
+  
+  # ========================================
+  # JOB 2: SEND PROPOSALS
+  # ========================================
+  send-proposals:
+    name: Send Proposals to Clients
+    runs-on: ubuntu-latest
+    needs: extract-and-match
+    if: |
+      github.event.inputs.send_proposals == 'true' &&
+      needs.extract-and-match.outputs.matched_jobs_count > 0
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml pyyaml
+      
+      - name: Download Matched Jobs
+        uses: actions/download-artifact@v4
+        with:
+          name: matched-freelancer-jobs
+      
+      - name: Send Proposals
+        id: proposals
+        run: |
+          echo "📧 Sending proposals to clients..."
+          
+          MAX_PROPOSALS="${{ github.event.inputs.max_proposals }}"
+          if [ -z "$MAX_PROPOSALS" ]; then
+            MAX_PROPOSALS="10"
+          fi
+          
+          python3 << 'EOF'
+          import json
+          import smtplib
+          import os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          from datetime import datetime
+          
+          # Load matched jobs
+          with open('matched_freelancer_jobs.json', 'r') as f:
+              data = json.load(f)
+          
+          jobs = data.get('jobs', [])
+          max_proposals = int(os.getenv('MAX_PROPOSALS', 10))
+          
+          # Sort by match score
+          sorted_jobs = sorted(jobs, key=lambda x: x.get('match_score', 0), reverse=True)
+          
+          # Email configuration
+          smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
+          smtp_port = int(os.getenv('SMTP_PORT', 587))
+          email_address = os.getenv('FREELANCER_EMAIL')
+          email_password = os.getenv('FREELANCER_PASSWORD')
+          
+          proposals_sent = 0
+          proposals_failed = 0
+          
+          for job in sorted_jobs[:max_proposals]:
+              client_email = job.get('client_email')
+              
+              if not client_email or '@' not in client_email:
+                  print(f"⚠️  No valid email for: {job.get('title', 'Untitled')}")
+                  continue
+              
+              try:
+                  # Generate proposal
+                  proposal = f"""Hello!
+
+                  I'm excited about your project: "{job.get('title', 'your project')}"
+
+                  RELEVANT SERVICES:
+                    """
+                  for service in job.get('matched_services', []):
+                      proposal += f"• {service}\n"
+                  
+                  proposal += f"""
+                  MATCHING SKILLS:
+                  {', '.join(job.get('matching_skills', []))}
+
+                  WHY CHOOSE ME:
+                      ✓ 5+ years of professional experience
+                      ✓ Strong portfolio of successful projects
+                      ✓ Clear communication and regular updates
+                      ✓ Quality code with documentation
+                      ✓ On-time delivery guaranteed
+
+                  I'd love to discuss your project in detail.
+
+                  Best regards,
+                  Ruperto Bonet
+
+                  Portfolio: https://github.com/sednabcn
+                  Email: ruperto.bonet@modelphysmat.com
+                  """
+                  
+                  # Create email
+                  msg = MIMEMultipart()
+                  msg['Subject'] = f"Proposal: {job.get('title', 'Your Project')}"
+                  msg['From'] = email_address
+                  msg['To'] = client_email
+                  
+                  msg.attach(MIMEText(proposal, 'plain'))
+                  
+                  # Send email
+                  with smtplib.SMTP(smtp_host, smtp_port) as server:
+                      server.starttls()
+                      server.login(email_address, email_password)
+                      server.send_message(msg)
+                  
+                  proposals_sent += 1
+                  print(f"✅ Sent proposal to {client_email} (Score: {job.get('match_score')}%)")
+                  
+              except Exception as e:
+                  proposals_failed += 1
+                  print(f"❌ Failed to send to {client_email}: {e}")
+          
+          print(f"\n📊 Summary:")
+          print(f"   Proposals sent: {proposals_sent}")
+          print(f"   Proposals failed: {proposals_failed}")
+          
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"sent={proposals_sent}\n")
+              f.write(f"failed={proposals_failed}\n")
+          EOF
+        env:
+          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+          FREELANCER_EMAIL_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          MAX_PROPOSALS: ${{ github.event.inputs.max_proposals }}
+      
+      - name: Track Proposals
+        run: |
+          echo "📝 Updating proposal tracking..."
+          
+          python3 << 'EOF'
+          import json
+          from datetime import datetime
+          import os
+          
+          # Load existing tracking
+          tracking_file = 'freelancer_proposal_tracking.json'
+          
+          if os.path.exists(tracking_file):
+              with open(tracking_file, 'r') as f:
+                  tracking = json.load(f)
+          else:
+              tracking = {
+                  'proposals': [],
+                  'statistics': {
+                      'total_sent': 0,
+                      'total_responses': 0,
+                      'total_accepted': 0,
+                      'response_rate': 0,
+                      'acceptance_rate': 0
+                  }
+              }
+          
+          # Add new proposals
+          with open('matched_freelancer_jobs.json', 'r') as f:
+              data = json.load(f)
+          
+          sent_count = int(os.getenv('PROPOSALS_SENT', 0))
+          
+          # Update statistics
+          tracking['statistics']['total_sent'] += sent_count
+          tracking['last_run'] = datetime.now().isoformat()
+          
+          # Save tracking
+          with open(tracking_file, 'w') as f:
+              json.dump(tracking, f, indent=2)
+          
+          print(f"✅ Tracking updated: {sent_count} proposals logged")
+          EOF
+        env:
+          PROPOSALS_SENT: ${{ steps.proposals.outputs.sent }}
+      
+      - name: Commit Tracking Data
+        run: |
+          git config user.name "🤖 Freelancer Bot"
+          git config user.email "bot@freelancer.local"
+          
+          git add freelancer_proposal_tracking.json 2>/dev/null || true
+          
+          if git diff-index --quiet HEAD --; then
+            echo "ℹ️  No changes to commit"
+          else
+            git commit -m "🤖 Update freelancer proposal tracking
+
+            - Proposals sent: ${{ steps.proposals.outputs.sent }}
+            - Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            
+            git push origin HEAD || echo "⚠️  Could not push changes"
+          fi
+  
+  # ========================================
+  # JOB 3: SEND SUMMARY REPORT
+  # ========================================
+  send-summary:
+    name: Send Daily Summary
+    runs-on: ubuntu-latest
+    needs: [extract-and-match, send-proposals]
+    if: always()
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      
+      - name: Download Matched Jobs
+        uses: actions/download-artifact@v4
+        with:
+          name: matched-freelancer-jobs
+        continue-on-error: true
+      
+      - name: Generate and Send Summary Email
+        run: |
+          python3 << 'EOF'
+          import json
+          import smtplib
+          import os
+          from email.mime.text import MIMEText
+          from datetime import datetime
+          
+          # Load data
+          try:
+              with open('matched_freelancer_jobs.json', 'r') as f:
+                  data = json.load(f)
+          except:
+              data = {'total_jobs': 0, 'matched_jobs': 0, 'jobs': []}
+          
+          jobs = data.get('jobs', [])
+          total = data.get('total_jobs', 0)
+          matched = data.get('matched_jobs', 0)
+          
+          # Load tracking
+          try:
+              with open('freelancer_proposal_tracking.json', 'r') as f:
+                  tracking = json.load(f)
+              stats = tracking.get('statistics', {})
+          except:
+              stats = {}
+          
+          # Generate summary
+          summary = f"""FREELANCER AUTOMATION DAILY SUMMARY
+          Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+          📊 TODAY'S STATISTICS:
+            • Total jobs analyzed: {total}
+            • Matched jobs (≥60%): {matched}
+            • Proposals sent this run: {os.getenv('PROPOSALS_SENT', 0)}
+
+          📈 OVERALL STATISTICS:
+            • Total proposals sent: {stats.get('total_sent', 0)}
+            • Total responses: {stats.get('total_responses', 0)}
+            • Total accepted: {stats.get('total_accepted', 0)}
+            • Response rate: {stats.get('response_rate', 0)}%
+            • Acceptance rate: {stats.get('acceptance_rate', 0)}%
+
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+          🎯 TOP 5 MATCHES TODAY:
+          """
+          
+          # Add top matches
+          sorted_jobs = sorted(jobs, key=lambda x: x.get('match_score', 0), reverse=True)
+          
+          for i, job in enumerate(sorted_jobs[:5], 1):
+              summary += f"""
+              {i}. {job.get('title', 'Untitled')[:80]}
+              Platform: {job.get('platform', 'Unknown').upper()}
+              Match Score: {job.get('match_score', 0)}%
+              Budget: {job.get('budget', 'Not specified')}
+              Skills: {', '.join(job.get('matching_skills', [])[:5])}
+              """
+              if job.get('url'):
+                  summary += f"   URL: {job.get('url')}\n"
+          
+          summary += f"""
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+          📥 GMAIL FREELANCER FOLDER:
+            Check your ruperto.bonet@modelphysmat.com/freelancer folder for new opportunities.
+
+            💡 TIP: Review matched jobs and send personalized proposals for best results.
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+            View full report: {os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}/actions/runs/{os.getenv('GITHUB_RUN_ID')}
+"""
+          
+          # Send email
+          email_address = os.getenv('FREELANCER_EMAIL')
+          email_password = os.getenv('FREELANCER_EMAIL_PASSWORD')
+          smtp_host = os.getenv('SMTP_HOST', 'smtp.gmail.com')
+          smtp_port = int(os.getenv('SMTP_PORT', 587))
+          
+          msg = MIMEText(summary, 'plain')
+          msg['Subject'] = f"Freelancer Daily Summary - {matched} Matches - {datetime.now().strftime('%Y-%m-%d')}"
+          msg['From'] = email_address
+          msg['To'] = email_address
+          
+          try:
+              with smtplib.SMTP(smtp_host, smtp_port) as server:
+                  server.starttls()
+                  server.login(email_address, email_password)
+                  server.send_message(msg)
+              
+              print("✅ Summary email sent successfully")
+          except Exception as e:
+              print(f"❌ Failed to send summary: {e}")
+          EOF
+        env:
+          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+          FREELANCER_EMAIL_PASSWORD: ${{ secrets.FREELANCER_EMAIL_PASSWORD }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          PROPOSALS_SENT: ${{ needs.send-proposals.outputs.sent }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+      
+      - name: Create Issue on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Freelancer Automation Failed',
+              body: `# Freelancer Automation Failure\n\n**Run ID:** ${{ github.run_id }}\n**Timestamp:** ${new Date().toISOString()}\n\n[View Workflow Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              labels: ['bug', 'freelancer-automation']
+            })

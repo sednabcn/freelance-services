@@ -114,11 +114,17 @@ jobs:
           else
             echo "gmail_jobs_count=0" >> $GITHUB_OUTPUT
             echo "No jobs extracted from Gmail"
+
           fi
-        
+
       - name: Scrape Freelancer Platforms
         id: scrape
         if: steps.config.outputs.mode == 'scrape' || steps.config.outputs.mode == 'both'
+        env:
+          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+          FREELANCER_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
+          UPWORK_API_KEY: ${{ secrets.UPWORK_API_KEY }}
+          FREELANCER_API_KEY: ${{ secrets.FREELANCER_API_KEY }}
         run: |
           echo "Scraping freelancer platforms..."
           
@@ -137,10 +143,7 @@ jobs:
             echo "scraped_jobs_count=0" >> $GITHUB_OUTPUT
             echo "No jobs scraped"
           fi
-        env:
-          UPWORK_API_KEY: ${{ secrets.UPWORK_API_KEY }}
-          FREELANCER_API_KEY: ${{ secrets.FREELANCER_API_KEY }}
-      
+            
       - name: Match Jobs to Profile
         id: match
         run: |

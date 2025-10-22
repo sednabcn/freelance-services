@@ -323,15 +323,15 @@ jobs:
               # Create markdown report
               report = f"""# Business Model Opportunities Report
               
-Generated: {timestamp}
+              Generated: {timestamp}
 
-## Summary
+              ## Summary
 
-- **Total Opportunities Analyzed:** {analysis.get('total_opportunities', 0)}
-- **Matched to Your Skills:** {analysis.get('matched_opportunities', 0)}
-- **Business Models Identified:** {len(analysis.get('business_models', []))}
+              - **Total Opportunities Analyzed:** {analysis.get('total_opportunities', 0)}
+              - **Matched to Your Skills:** {analysis.get('matched_opportunities', 0)}
+              - **Business Models Identified:** {len(analysis.get('business_models', []))}
 
-"""
+              """
               
               business_models = analysis.get('business_models', [])
               if business_models:
@@ -341,26 +341,26 @@ Generated: {timestamp}
                   for i, model in enumerate(business_models, 1):
                       report += f"""### {i}. {model['name']}
 
-**Description:** {model['description']}
+                      **Description:** {model['description']}
 
-**Market Demand:** {model['count']} opportunities found  
-**Average Match Score:** {model.get('avg_score', 0)}%
+                      **Market Demand:** {model['count']} opportunities found  
+                      **Average Match Score:** {model.get('avg_score', 0)}%
 
-**Example Projects:**
-"""
+                      **Example Projects:**
+                      """
                       for example in model.get('examples', []):
                           report += f"- [{example['title']}]({example.get('url', '#')}) (Score: {example.get('score', 0)}%)\n"
                       
                       report += """
-**Potential Service Offering:**
-- Create standardized packages (Basic, Standard, Premium)
-- Develop reusable templates and frameworks
-- Offer subscription-based services
-- Build productized consulting
+                      **Potential Service Offering:**
+                      - Create standardized packages (Basic, Standard, Premium)
+                      - Develop reusable templates and frameworks
+                      - Offer subscription-based services
+                      - Build productized consulting
 
----
+                      ---
 
-"""
+                      """
               else:
                   report += "## 💼 No Business Models Identified Yet\n\n"
                   report += "Run the finder with more opportunities to identify patterns.\n\n"
@@ -419,13 +419,13 @@ Generated: {timestamp}
               # Create stats badge section
               stats = f"""## 📊 Latest Scan Results
 
-**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
+              **Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
 
-- 🎯 **Opportunities Found:** {analysis.get('total_opportunities', 0)}
-- ✅ **Matched to Profile:** {analysis.get('matched_opportunities', 0)}
-- 💼 **Business Models:** {len(analysis.get('business_models', []))}
+              - 🎯 **Opportunities Found:** {analysis.get('total_opportunities', 0)}
+              - ✅ **Matched to Profile:** {analysis.get('matched_opportunities', 0)}
+              - 💼 **Business Models:** {len(analysis.get('business_models', []))}
 
-"""
+              """
               
               business_models = analysis.get('business_models', [])
               if business_models:

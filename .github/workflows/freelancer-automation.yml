@@ -473,7 +473,6 @@ jobs:
         continue-on-error: true
         with:
           name: matched-freelancer-jobs
-        
       
       - name: Generate and Send Summary Email
         run: |
@@ -510,18 +509,18 @@ jobs:
           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
           📊 TODAY'S STATISTICS:
-            • Total jobs analyzed: {total}
-            • Matched jobs (≥60%): {matched}
-            • Proposals sent this run: {os.getenv('PROPOSALS_SENT', 0)}
+          • Total jobs analyzed: {total}
+          • Matched jobs (≥60%): {matched}
+          • Proposals sent this run: {os.getenv('PROPOSALS_SENT', 0)}
 
          📈 OVERALL STATISTICS:
-           • Total proposals sent: {stats.get('total_sent', 0)}
-           • Total responses: {stats.get('total_responses', 0)}
-           • Total accepted: {stats.get('total_accepted', 0)}
-           • Response rate: {stats.get('response_rate', 0)}%
-           • Acceptance rate: {stats.get('acceptance_rate', 0)}%
+          • Total proposals sent: {stats.get('total_sent', 0)}
+          • Total responses: {stats.get('total_responses', 0)}
+          • Total accepted: {stats.get('total_accepted', 0)}
+          • Response rate: {stats.get('response_rate', 0)}%
+          • Acceptance rate: {stats.get('acceptance_rate', 0)}%
 
-           ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
           🎯 TOP 5 MATCHES TODAY:
           """

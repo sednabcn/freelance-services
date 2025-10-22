@@ -1120,9 +1120,21 @@ def main():
     analyzer = BusinessModelAnalyzer()
     analysis = analyzer.analyze_opportunities(enriched_jobs)
 
-    # Save analysis to file
+    # =========================================================================
+    # SAVE RESULTS WITH PROPER STRUCTURE
+    # =========================================================================
+    output_data = {
+        'generated_at': datetime.now().isoformat(),
+        'search_params': {
+            'keywords': args.keywords,
+            'days_back': args.days_back
+        },
+        'opportunities': enriched_jobs,
+        'analysis': analysis
+    }
+    
     with open(args.output, 'w', encoding='utf-8') as f:
-        json.dump(analysis, f, indent=2)
+        json.dump(output_data, f, indent=2)
     print(f"📁 Results saved to {args.output}")
 
     # =========================================================================
@@ -1135,7 +1147,7 @@ def main():
         print("📧 Email notification skipped (use --skip-email to silence this message)")
 
     print("\n🎯 Done! Review your opportunities and consider recurring business models.\n")
-
+    
 
 if __name__ == '__main__':
     try:

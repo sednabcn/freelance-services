@@ -150,17 +150,43 @@ jobs:
           # Run the finder
           eval $CMD
           
-          # Extract statistics
+          # Extract statistics with better error handling
           if [ -f opportunities.json ]; then
-            TOTAL=$(python3 -c "import json; data=json.load(open('opportunities.json')); print(data['analysis']['total_opportunities'])")
-            MATCHED=$(python3 -c "import json; data=json.load(open('opportunities.json')); print(data['analysis']['matched_opportunities'])")
-            MODELS=$(python3 -c "import json; data=json.load(open('opportunities.json')); print(len(data['analysis']['business_models']))")
+            echo "📄 Checking JSON structure..."
+            python3 -c "import json; print(json.dumps(json.load(open('opportunities.json')).keys(), indent=2))"
             
-            echo "total_opportunities=$TOTAL" >> $GITHUB_OUTPUT
-            echo "matched_opportunities=$MATCHED" >> $GITHUB_OUTPUT
-            echo "business_models=$MODELS" >> $GITHUB_OUTPUT
-            
-            echo "✅ Found $TOTAL opportunities, $MATCHED matched, $MODELS business models"
+            # Try to extract stats, but handle missing keys gracefully
+            python3 << 'PYEOF' >> $GITHUB_OUTPUT
+          import json
+          import sys
+          
+          try:
+              with open('opportunities.json', 'r') as f:
+                  data = json.load(f)
+              
+              # Check if 'analysis' key exists
+              if 'analysis' in data:
+                  analysis = data['analysis']
+                  total = analysis.get('total_opportunities', 0)
+                  matched = analysis.get('matched_opportunities', 0)
+                  models = len(analysis.get('business_models', []))
+              else:
+                  # Fallback: try to count from opportunities list
+                  total = len(data.get('opportunities', []))
+                  matched = len([j for j in data.get('opportunities', []) if j.get('match_score', 0) > 0])
+                  models = 0
+              
+              print(f"total_opportunities={total}")
+              print(f"matched_opportunities={matched}")
+              print(f"business_models={models}")
+              
+              print(f"\n✅ Found {total} opportunities, {matched} matched, {models} business models", file=sys.stderr)
+          except Exception as e:
+              print(f"⚠️  Error parsing JSON: {e}", file=sys.stderr)
+              print("total_opportunities=0")
+              print("matched_opportunities=0")
+              print("business_models=0")
+          PYEOF
           else
             echo "⚠️  opportunities.json not created"
             echo "total_opportunities=0" >> $GITHUB_OUTPUT
@@ -188,45 +214,64 @@ jobs:
               with open('opportunities.json', 'r') as f:
                   data = json.load(f)
               
-              analysis = data['analysis']
+              # Handle both with and without 'analysis' key
+              if 'analysis' in data:
+                  analysis = data['analysis']
+                  opportunities = data.get('opportunities', [])
+              else:
+                  # Create minimal analysis from opportunities
+                  opportunities = data.get('opportunities', [])
+                  analysis = {
+                      'total_opportunities': len(opportunities),
+                      'matched_opportunities': len([j for j in opportunities if j.get('match_score', 0) > 0]),
+                      'business_models': [],
+                      'top_skills_in_demand': [],
+                      'platform_distribution': {},
+                      'matched_jobs': [j for j in opportunities if j.get('match_score', 0) > 0]
+                  }
               
               print("\n" + "="*80)
               print("FREELANCER OPPORTUNITY FINDER - SUMMARY")
               print("="*80)
               print(f"\n📊 Statistics:")
-              print(f"   Total Opportunities: {analysis['total_opportunities']}")
-              print(f"   Matched Opportunities: {analysis['matched_opportunities']}")
-              print(f"   Business Models Found: {len(analysis['business_models'])}")
+              print(f"   Total Opportunities: {analysis.get('total_opportunities', 0)}")
+              print(f"   Matched Opportunities: {analysis.get('matched_opportunities', 0)}")
+              print(f"   Business Models Found: {len(analysis.get('business_models', []))}")
               
               # Business Models
-              if analysis['business_models']:
+              if analysis.get('business_models'):
                   print(f"\n💼 Business Model Opportunities:")
                   for i, model in enumerate(analysis['business_models'][:5], 1):
                       print(f"   {i}. {model['name']} ({model['count']} opportunities)")
                       print(f"      {model['description']}")
               
               # Top Skills
-              if analysis['top_skills_in_demand']:
+              if analysis.get('top_skills_in_demand'):
                   print(f"\n🔥 Skills Most in Demand:")
                   for skill, count in analysis['top_skills_in_demand'][:10]:
                       print(f"   • {skill}: {count} mentions")
               
               # Platform Distribution
-              if analysis['platform_distribution']:
+              if analysis.get('platform_distribution'):
                   print(f"\n📍 Platform Distribution:")
                   for platform, count in analysis['platform_distribution'].items():
                       print(f"   • {platform}: {count} opportunities")
               
               # Top Matches
-              if analysis['matched_jobs']:
+              matched_jobs = analysis.get('matched_jobs', [])
+              if matched_jobs:
                   print(f"\n🎯 Top 5 Matched Opportunities:")
-                  for i, job in enumerate(analysis['matched_jobs'][:5], 1):
-                      print(f"\n   {i}. {job['title'][:70]}")
-                      print(f"      Match Score: {job['match_score']}%")
+                  for i, job in enumerate(matched_jobs[:5], 1):
+                      print(f"\n   {i}. {job.get('title', 'Untitled')[:70]}")
+                      print(f"      Match Score: {job.get('match_score', 0)}%")
                       print(f"      Platform: {job.get('platform', 'unknown').upper()}")
-                      print(f"      Skills: {', '.join(job.get('matching_skills', [])[:5])}")
+                      skills = job.get('matching_skills', [])
+                      if skills:
+                          print(f"      Skills: {', '.join(skills[:5])}")
                       if job.get('url'):
                           print(f"      URL: {job['url']}")
+              else:
+                  print(f"\n⚠️  No matched opportunities found")
               
               print("\n" + "="*80)
               
@@ -234,6 +279,8 @@ jobs:
               print("❌ opportunities.json not found - no data to report")
           except Exception as e:
               print(f"❌ Error generating report: {e}")
+              import traceback
+              traceback.print_exc()
           EOF
       
       - name: Upload Opportunities
@@ -253,58 +300,77 @@ jobs:
           
           python3 << 'EOF'
           import json
+          from datetime import datetime
           
           try:
               with open('opportunities.json', 'r') as f:
                   data = json.load(f)
               
-              analysis = data['analysis']
+              # Handle both structures
+              if 'analysis' in data:
+                  analysis = data['analysis']
+              else:
+                  opportunities = data.get('opportunities', [])
+                  analysis = {
+                      'total_opportunities': len(opportunities),
+                      'matched_opportunities': len([j for j in opportunities if j.get('match_score', 0) > 0]),
+                      'business_models': [],
+                      'top_skills_in_demand': []
+                  }
+              
+              timestamp = data.get('generated_at', datetime.now().isoformat())
               
               # Create markdown report
               report = f"""# Business Model Opportunities Report
               
-              Generated: {data['generated_at']}
+Generated: {timestamp}
 
-              ## Summary
+## Summary
 
-              - **Total Opportunities Analyzed:** {analysis['total_opportunities']}
-              - **Matched to Your Skills:** {analysis['matched_opportunities']}
-              - **Business Models Identified:** {len(analysis['business_models'])}
+- **Total Opportunities Analyzed:** {analysis.get('total_opportunities', 0)}
+- **Matched to Your Skills:** {analysis.get('matched_opportunities', 0)}
+- **Business Models Identified:** {len(analysis.get('business_models', []))}
 
-              ## 💼 Business Models You Can Offer as Services
-
-              These are recurring patterns in the marketplace that you could turn into standardized service offerings:
-                
-              """
+"""
               
-              for i, model in enumerate(analysis['business_models'], 1):
-                  report += f"""
-                  ### {i}. {model['name']}
-
-                  **Description:** {model['description']}
-
-                  **Market Demand:** {model['count']} opportunities found  
-                  **Average Match Score:** {model['avg_score']}%
-
-                  **Example Projects:**
-                  """
-                  for example in model['examples']:
-                      report += f"- [{example['title']}]({example.get('url', '#')}) (Score: {example['score']}%)\n"
+              business_models = analysis.get('business_models', [])
+              if business_models:
+                  report += "## 💼 Business Models You Can Offer as Services\n\n"
+                  report += "These are recurring patterns in the marketplace that you could turn into standardized service offerings:\n\n"
                   
-                  report += f"""
-                  **Potential Service Offering:**
-                  - Create standardized packages (Basic, Standard, Premium)
-                  - Develop reusable templates and frameworks
-                  - Offer subscription-based services
-                  - Build productized consulting
+                  for i, model in enumerate(business_models, 1):
+                      report += f"""### {i}. {model['name']}
 
-                  ---
-                  """
+**Description:** {model['description']}
+
+**Market Demand:** {model['count']} opportunities found  
+**Average Match Score:** {model.get('avg_score', 0)}%
+
+**Example Projects:**
+"""
+                      for example in model.get('examples', []):
+                          report += f"- [{example['title']}]({example.get('url', '#')}) (Score: {example.get('score', 0)}%)\n"
+                      
+                      report += """
+**Potential Service Offering:**
+- Create standardized packages (Basic, Standard, Premium)
+- Develop reusable templates and frameworks
+- Offer subscription-based services
+- Build productized consulting
+
+---
+
+"""
+              else:
+                  report += "## 💼 No Business Models Identified Yet\n\n"
+                  report += "Run the finder with more opportunities to identify patterns.\n\n"
               
               # Add skills section
-              report += "\n## 🔥 Skills Most in Demand\n\n"
-              for skill, count in analysis['top_skills_in_demand'][:15]:
-                  report += f"- **{skill}**: {count} mentions\n"
+              skills = analysis.get('top_skills_in_demand', [])
+              if skills:
+                  report += "## 🔥 Skills Most in Demand\n\n"
+                  for skill, count in skills[:15]:
+                      report += f"- **{skill}**: {count} mentions\n"
               
               # Save report
               with open('business_model_report.md', 'w') as f:
@@ -314,6 +380,8 @@ jobs:
               
           except Exception as e:
               print(f"❌ Error creating report: {e}")
+              import traceback
+              traceback.print_exc()
           EOF
       
       - name: Upload Business Model Report
@@ -337,24 +405,33 @@ jobs:
               with open('opportunities.json', 'r') as f:
                   data = json.load(f)
               
-              analysis = data['analysis']
+              # Handle both structures
+              if 'analysis' in data:
+                  analysis = data['analysis']
+              else:
+                  opportunities = data.get('opportunities', [])
+                  analysis = {
+                      'total_opportunities': len(opportunities),
+                      'matched_opportunities': len([j for j in opportunities if j.get('match_score', 0) > 0]),
+                      'business_models': []
+                  }
               
               # Create stats badge section
-              stats = f"""
-              ## 📊 Latest Scan Results
+              stats = f"""## 📊 Latest Scan Results
 
-              **Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
+**Last Updated:** {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}
 
-              - 🎯 **Opportunities Found:** {analysis['total_opportunities']}
-              - ✅ **Matched to Profile:** {analysis['matched_opportunities']}
-              - 💼 **Business Models:** {len(analysis['business_models'])}
+- 🎯 **Opportunities Found:** {analysis.get('total_opportunities', 0)}
+- ✅ **Matched to Profile:** {analysis.get('matched_opportunities', 0)}
+- 💼 **Business Models:** {len(analysis.get('business_models', []))}
 
-              ### Top Business Opportunities
-
-              """
+"""
               
-              for i, model in enumerate(analysis['business_models'][:3], 1):
-                  stats += f"{i}. **{model['name']}** - {model['count']} opportunities\n"
+              business_models = analysis.get('business_models', [])
+              if business_models:
+                  stats += "### Top Business Opportunities\n\n"
+                  for i, model in enumerate(business_models[:3], 1):
+                      stats += f"{i}. **{model['name']}** - {model['count']} opportunities\n"
               
               print(stats)
               

@@ -182,7 +182,7 @@ jobs:
               f.write(f"total_count={len(all_jobs)}\n")
               f.write(f"matched_count={len(matched_jobs)}\n")
           '
-      
+
       - name: Generate Match Report
         run: |
           echo "Generating match report..."
@@ -197,8 +197,10 @@ jobs:
           print("\n" + "="*80)
           print("FREELANCER JOB MATCHING REPORT")
           print("="*80)
-          print(f"\nTotal Jobs Analyzed: {data.get(\"total_jobs\", 0)}")
-          print(f"Matched Jobs (>=60% score): {data.get(\"matched_jobs\", 0)}")
+          total_jobs = data.get("total_jobs", 0)
+          matched_jobs = data.get("matched_jobs", 0)
+          print(f"\nTotal Jobs Analyzed: {total_jobs}")
+          print(f"Matched Jobs (>=60% score): {matched_jobs}")
           
           if jobs:
               print("\n" + "-"*80)
@@ -208,16 +210,23 @@ jobs:
               sorted_jobs = sorted(jobs, key=lambda x: x.get("match_score", 0), reverse=True)
               
               for i, job in enumerate(sorted_jobs[:10], 1):
-                  print(f"\n{i}. {job.get(\"title\", \"Untitled\")[:70]}")
-                  print(f"   Platform: {job.get(\"platform\", \"Unknown\")}")
-                  print(f"   Match Score: {job.get(\"match_score\", 0)}%")
-                  print(f"   Budget: {job.get(\"budget\", \"Not specified\")}")
-                  print(f"   Skills: {\", \".join(job.get(\"matching_skills\", [])[:5])}")
-                  if job.get("url"):
-                      print(f"   URL: {job.get(\"url\")}")
+                  title = job.get("title", "Untitled")[:70]
+                  platform = job.get("platform", "Unknown")
+                  match_score = job.get("match_score", 0)
+                  budget = job.get("budget", "Not specified")
+                  skills = ", ".join(job.get("matching_skills", [])[:5])
+                  url = job.get("url", "")
+                  
+                  print(f"\n{i}. {title}")
+                  print(f"   Platform: {platform}")
+                  print(f"   Match Score: {match_score}%")
+                  print(f"   Budget: {budget}")
+                  print(f"   Skills: {skills}")
+                  if url:
+                      print(f"   URL: {url}")
           
           print("\n" + "="*80)
-          '
+          '    
       
       - name: Upload Matched Jobs
         uses: actions/upload-artifact@v4

@@ -352,15 +352,15 @@ jobs:
                           report += f"- [{example['title']}]({example.get('url', '#')}) (Score: {example.get('score', 0)}%)\n"
                       
                       report += """
-**Potential Service Offering:**
-- Create standardized packages (Basic, Standard, Premium)
-- Develop reusable templates and frameworks
-- Offer subscription-based services
-- Build productized consulting
+                      **Potential Service Offering:**
+                      - Create standardized packages (Basic, Standard, Premium)
+                      - Develop reusable templates and frameworks
+                      - Offer subscription-based services
+                      - Build productized consulting
 
----
+                      ---
 
-"""
+                      """
               else:
                   report += "## 💼 No Business Models Identified Yet\n\n"
                   report += "Run the finder with more opportunities to identify patterns.\n\n"

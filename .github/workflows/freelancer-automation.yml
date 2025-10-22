@@ -38,6 +38,7 @@ on:
 env:
   PYTHON_VERSION: '3.10'
   TIMEZONE: 'Europe/London'
+  
 
 jobs:
   extract-and-match:
@@ -250,10 +251,16 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: matched-freelancer-jobs
-      
-      - name: Send Proposals
-        id: proposals
-        run: |
+
+     - name: Run Freelancer Automation
+       env:
+         FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+         FREELANCER_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
+       run: python .github/scripts/freelancer_automation.py --mode gmail
+
+     - name: Send Proposals
+       id: proposals
+       run: |
           echo "Sending proposals to clients..."
           MAX_PROPOSALS="${{ github.event.inputs.max_proposals }}"
           if [ -z "$MAX_PROPOSALS" ]; then

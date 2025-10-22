@@ -693,7 +693,7 @@ def main():
     
     if not email_password:
         print("❌ Error: Email password not set")
-        print("   Set FREELANCER_EMAIL_PASSWORD environment variable")
+        print("   Set FREELANCER_PASSWORD environment variable")
         return 1
     
     all_jobs = []

@@ -436,7 +436,7 @@ jobs:
         run: python3 send_summary.py
         env:
           FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
-          FREELANCER_EMAIL_PASSWORD: ${{ secrets.FREELANCER_EMAIL_PASSWORD }}
+          FREELANCER_EMAIL_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           PROPOSALS_SENT: ${{ needs.send-proposals.outputs.sent }}

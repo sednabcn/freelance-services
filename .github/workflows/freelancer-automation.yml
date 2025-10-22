@@ -93,6 +93,9 @@ jobs:
       - name: Extract from Gmail Freelancer Folder
         id: gmail
         if: steps.config.outputs.mode == 'gmail' || steps.config.outputs.mode == 'both'
+        env:
+          FREELANCER_EMAIL: ${{ secrets.FREELANCER_EMAIL }}
+          FREELANCER_PASSWORD: ${{ secrets.FREELANCER_PASSWORD }}
         run: |
           echo "Extracting emails from Gmail freelancer folder..."
           

@@ -4,6 +4,8 @@
 requests>=2.31.0
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
+feedparser
+psycopg2-binary
 
 # Optional: If you want to add more features later
 # selenium>=4.15.0  # For JavaScript-heavy sites

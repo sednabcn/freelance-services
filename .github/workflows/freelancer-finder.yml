@@ -52,7 +52,7 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml feedparser
+          pip install requests beautifulsoup4 lxml feedparser psycopg2-binary
       
       # NEW: Test credentials before running main script
       - name: Test Gmail Connection

@@ -53,7 +53,7 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install requests beautifulsoup4 lxml feedparser
-          pip install gspread psycopg2-binary
+          pip install gspread psycopg2-binary oauth2client
       
       # NEW: Test credentials before running main script
       - name: Test Gmail Connection

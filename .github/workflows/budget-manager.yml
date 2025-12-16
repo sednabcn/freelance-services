@@ -1,0 +1,861 @@
+name: GitHub Actions Budget Manager
+
+on:
+  # Check budget before any workflow runs
+  workflow_call:
+    outputs:
+      can_run:
+        description: "Whether workflows can run based on budget"
+        value: ${{ jobs.check-budget.outputs.can_run }}
+  
+  # Manual trigger to check status
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - 'check_budget'
+          - 'disable_all_workflows'
+          - 'enable_all_workflows'
+          - 'get_usage_report'
+          - 'analyze_workflow_usage'
+  
+  # Run daily to monitor usage
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+    - cron: '0 0 1 * *'    # 1st day of month at midnight (auto-enable)
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+
+env:
+  # Set your monthly limit (in minutes)
+  MONTHLY_LIMIT: 1900  # Leave 100 minutes buffer from 2000
+  WARNING_THRESHOLD: 1500  # 75% usage warning
+  CRITICAL_THRESHOLD: 1800  # 90% usage - start disabling
+  
+  # Email notification settings
+  SMTP_SERVER: smtp.gmail.com
+  SMTP_PORT: 587
+  NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+  SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+  SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+
+jobs:
+  check-budget:
+    runs-on: ubuntu-latest
+    outputs:
+      can_run: ${{ steps.check.outputs.can_run }}
+      usage: ${{ steps.check.outputs.usage }}
+      percentage: ${{ steps.check.outputs.percentage }}
+      status: ${{ steps.check.outputs.status }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Check GitHub Actions usage
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            // Get billing info for the account
+            try {
+              const { data: billing } = await github.rest.billing.getGithubActionsBillingUser({
+                username: owner
+              });
+              
+              const usedMinutes = billing.total_minutes_used || 0;
+              const includedMinutes = billing.included_minutes || 2000;
+              const monthlyLimit = parseInt(process.env.MONTHLY_LIMIT);
+              const warning = parseInt(process.env.WARNING_THRESHOLD);
+              const critical = parseInt(process.env.CRITICAL_THRESHOLD);
+              
+              const percentage = (usedMinutes / includedMinutes) * 100;
+              const canRun = usedMinutes < monthlyLimit;
+              
+              // Determine status
+              let status = 'normal';
+              if (usedMinutes >= critical) {
+                status = 'critical';
+              } else if (usedMinutes >= warning) {
+                status = 'warning';
+              }
+              
+              console.log(`📊 GitHub Actions Usage Report`);
+              console.log(`Used: ${usedMinutes} / ${includedMinutes} minutes`);
+              console.log(`Percentage: ${percentage.toFixed(2)}%`);
+              console.log(`Monthly Limit: ${monthlyLimit} minutes`);
+              console.log(`Status: ${status}`);
+              console.log(`Can Run: ${canRun}`);
+              
+              core.setOutput('can_run', canRun);
+              core.setOutput('usage', usedMinutes);
+              core.setOutput('percentage', percentage.toFixed(2));
+              core.setOutput('status', status);
+              
+              // Set environment variable for other jobs
+              core.exportVariable('CURRENT_USAGE', usedMinutes);
+              core.exportVariable('USAGE_PERCENTAGE', percentage.toFixed(2));
+              core.exportVariable('USAGE_STATUS', status);
+              
+              return {
+                used: usedMinutes,
+                included: includedMinutes,
+                percentage: percentage.toFixed(2),
+                canRun: canRun,
+                status: status
+              };
+              
+            } catch (error) {
+              console.log(`⚠️ Could not fetch billing info: ${error.message}`);
+              console.log('Assuming we can run (fail-safe mode)');
+              core.setOutput('can_run', true);
+              core.setOutput('usage', 0);
+              core.setOutput('percentage', 0);
+              core.setOutput('status', 'unknown');
+              return null;
+            }
+  
+  analyze-workflow-usage:
+    needs: check-budget
+    runs-on: ubuntu-latest
+    outputs:
+      top_workflows: ${{ steps.analyze.outputs.top_workflows }}
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Analyze workflow usage by workflow
+        id: analyze
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            console.log('📊 Analyzing workflow usage...\n');
+            
+            // Get all workflows
+            const { data: workflows } = await github.rest.actions.listRepoWorkflows({
+              owner,
+              repo
+            });
+            
+            const workflowUsage = [];
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            
+            // Analyze each workflow
+            for (const workflow of workflows.workflows) {
+              try {
+                // Get recent runs for this workflow
+                const { data: runs } = await github.rest.actions.listWorkflowRuns({
+                  owner,
+                  repo,
+                  workflow_id: workflow.id,
+                  per_page: 100,
+                  created: `>=${thirtyDaysAgo.toISOString()}`
+                });
+                
+                let totalMinutes = 0;
+                let completedRuns = 0;
+                let failedRuns = 0;
+                
+                for (const run of runs.workflow_runs) {
+                  if (run.run_duration_ms) {
+                    const minutes = run.run_duration_ms / 1000 / 60;
+                    totalMinutes += minutes;
+                    completedRuns++;
+                    
+                    if (run.conclusion === 'failure') {
+                      failedRuns++;
+                    }
+                  }
+                }
+                
+                if (completedRuns > 0) {
+                  const avgMinutes = totalMinutes / completedRuns;
+                  workflowUsage.push({
+                    name: workflow.name,
+                    id: workflow.id,
+                    totalMinutes: Math.round(totalMinutes),
+                    avgMinutes: Math.round(avgMinutes * 10) / 10,
+                    runs: completedRuns,
+                    failedRuns: failedRuns,
+                    state: workflow.state
+                  });
+                }
+                
+                // Small delay to avoid rate limiting
+                await new Promise(resolve => setTimeout(resolve, 100));
+                
+              } catch (error) {
+                console.log(`Could not analyze ${workflow.name}: ${error.message}`);
+              }
+            }
+            
+            // Sort by total minutes used (descending)
+            workflowUsage.sort((a, b) => b.totalMinutes - a.totalMinutes);
+            
+            // Display top consumers
+            console.log('🔝 Top Workflow Consumers (Last 30 Days):\n');
+            console.log('Rank | Workflow Name | Total Min | Avg Min | Runs | Failed | Status');
+            console.log('-----|---------------|-----------|---------|------|--------|-------');
+            
+            workflowUsage.slice(0, 10).forEach((wf, idx) => {
+              console.log(
+                `${(idx + 1).toString().padStart(4)} | ` +
+                `${wf.name.padEnd(13)} | ` +
+                `${wf.totalMinutes.toString().padStart(9)} | ` +
+                `${wf.avgMinutes.toString().padStart(7)} | ` +
+                `${wf.runs.toString().padStart(4)} | ` +
+                `${wf.failedRuns.toString().padStart(6)} | ` +
+                `${wf.state}`
+              );
+            });
+            
+            // Save analysis results
+            const fs = require('fs');
+            const reportDir = '.github/reports';
+            
+            if (!fs.existsSync(reportDir)) {
+              fs.mkdirSync(reportDir, { recursive: true });
+            }
+            
+            fs.writeFileSync(
+              `${reportDir}/workflow_usage.json`,
+              JSON.stringify(workflowUsage, null, 2)
+            );
+            
+            // Set output for email notification
+            core.setOutput('top_workflows', JSON.stringify(workflowUsage.slice(0, 5)));
+            
+            return workflowUsage;
+  
+  send-email-notification:
+    needs: [check-budget, analyze-workflow-usage]
+    runs-on: ubuntu-latest
+    if: |
+      needs.check-budget.outputs.status != 'normal' &&
+      needs.check-budget.outputs.status != 'unknown'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup Python for email
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Send email notification
+        env:
+          USAGE: ${{ needs.check-budget.outputs.usage }}
+          PERCENTAGE: ${{ needs.check-budget.outputs.percentage }}
+          STATUS: ${{ needs.check-budget.outputs.status }}
+          TOP_WORKFLOWS: ${{ needs.analyze-workflow-usage.outputs.top_workflows }}
+        run: |
+          python3 << 'EOF'
+          import smtplib
+          import os
+          import json
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+          from datetime import datetime
+          
+          # Get environment variables
+          smtp_server = os.environ.get('SMTP_SERVER', 'smtp.gmail.com')
+          smtp_port = int(os.environ.get('SMTP_PORT', '587'))
+          smtp_username = os.environ.get('SMTP_USERNAME', '')
+          smtp_password = os.environ.get('SMTP_PASSWORD', '')
+          notification_email = os.environ.get('NOTIFICATION_EMAIL', '')
+          
+          usage = os.environ.get('USAGE', '0')
+          percentage = os.environ.get('PERCENTAGE', '0')
+          status = os.environ.get('STATUS', 'unknown')
+          top_workflows_json = os.environ.get('TOP_WORKFLOWS', '[]')
+          
+          if not notification_email or not smtp_username or not smtp_password:
+              print("⚠️ Email credentials not configured. Skipping email notification.")
+              print("Please set NOTIFICATION_EMAIL, SMTP_USERNAME, and SMTP_PASSWORD secrets.")
+              exit(0)
+          
+          # Parse top workflows
+          try:
+              top_workflows = json.loads(top_workflows_json)
+          except:
+              top_workflows = []
+          
+          # Determine email subject and urgency
+          if status == 'critical':
+              subject = f"🚨 CRITICAL: GitHub Actions at {percentage}% - Workflows DISABLED"
+              urgency = "CRITICAL"
+              emoji = "🚨"
+              color = "#dc3545"
+          else:
+              subject = f"⚠️ WARNING: GitHub Actions at {percentage}% - Action Required"
+              urgency = "WARNING"
+              emoji = "⚠️"
+              color = "#ffc107"
+          
+          # Build workflow usage table
+          workflow_table = ""
+          if top_workflows:
+              workflow_table = "<h3>📊 Top 5 Workflow Consumers (Last 30 Days)</h3>"
+              workflow_table += "<table border='1' cellpadding='8' cellspacing='0' style='border-collapse: collapse; width: 100%;'>"
+              workflow_table += "<tr style='background-color: #f0f0f0;'>"
+              workflow_table += "<th>Rank</th><th>Workflow</th><th>Total Min</th><th>Avg Min</th><th>Runs</th><th>Failed</th></tr>"
+              
+              for idx, wf in enumerate(top_workflows, 1):
+                  workflow_table += f"<tr>"
+                  workflow_table += f"<td style='text-align: center;'>{idx}</td>"
+                  workflow_table += f"<td><strong>{wf['name']}</strong></td>"
+                  workflow_table += f"<td style='text-align: right;'>{wf['totalMinutes']}</td>"
+                  workflow_table += f"<td style='text-align: right;'>{wf['avgMinutes']}</td>"
+                  workflow_table += f"<td style='text-align: center;'>{wf['runs']}</td>"
+                  workflow_table += f"<td style='text-align: center;'>{wf['failedRuns']}</td>"
+                  workflow_table += f"</tr>"
+              
+              workflow_table += "</table>"
+          
+          # Create HTML email body
+          html_body = f"""
+          <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+              <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                
+                <div style="background-color: {color}; color: white; padding: 20px; border-radius: 5px; margin-bottom: 20px;">
+                  <h1 style="margin: 0;">{emoji} {urgency} ALERT</h1>
+                  <p style="margin: 10px 0 0 0; font-size: 18px;">GitHub Actions Usage: {percentage}%</p>
+                </div>
+                
+                <div style="background-color: #f9f9f9; padding: 20px; border-radius: 5px; margin-bottom: 20px;">
+                  <h2>📊 Current Status</h2>
+                  <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                      <td style="padding: 8px;"><strong>Used Minutes:</strong></td>
+                      <td style="padding: 8px;">{usage} / 2000</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px;"><strong>Usage Percentage:</strong></td>
+                      <td style="padding: 8px;">{percentage}%</td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px;"><strong>Status:</strong></td>
+                      <td style="padding: 8px;"><span style="color: {color}; font-weight: bold;">{status.upper()}</span></td>
+                    </tr>
+                    <tr>
+                      <td style="padding: 8px;"><strong>Time:</strong></td>
+                      <td style="padding: 8px;">{datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</td>
+                    </tr>
+                  </table>
+                </div>
+                
+                {workflow_table}
+                
+                <div style="background-color: #e7f3ff; padding: 20px; border-radius: 5px; border-left: 4px solid #2196F3; margin: 20px 0;">
+                  <h3>💡 Recommendations</h3>
+                  <ul>
+                    <li>Review and optimize the top consuming workflows</li>
+                    <li>Consider reducing workflow frequency</li>
+                    <li>Disable non-essential workflows temporarily</li>
+                    <li>Check for failed runs that are wasting minutes</li>
+                  </ul>
+                </div>
+                
+                <div style="background-color: #fff3cd; padding: 20px; border-radius: 5px; border-left: 4px solid #ffc107; margin: 20px 0;">
+                  <h3>🔔 Automatic Actions</h3>
+                  <p><strong>{'✅ Workflows have been automatically DISABLED' if status == 'critical' else '⚠️ Workflows will be disabled at 90% usage'}</strong></p>
+                  <p>Workflows will automatically re-enable on the 1st of next month.</p>
+                </div>
+                
+                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid #ddd; font-size: 12px; color: #666;">
+                  <p>View detailed reports: <a href="https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions">GitHub Actions Dashboard</a></p>
+                  <p>This is an automated notification from GitHub Actions Budget Manager</p>
+                </div>
+                
+              </div>
+            </body>
+          </html>
+          """
+          
+          # Create plain text alternative
+          text_body = f"""
+          {emoji} {urgency} ALERT - GitHub Actions Usage: {percentage}%
+          
+          CURRENT STATUS:
+          - Used Minutes: {usage} / 2000
+          - Usage Percentage: {percentage}%
+          - Status: {status.upper()}
+          - Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}
+          
+          {'Workflows have been automatically DISABLED' if status == 'critical' else 'Workflows will be disabled at 90% usage'}
+          
+          Workflows will automatically re-enable on the 1st of next month.
+          
+          View details: https://github.com/{os.environ.get('GITHUB_REPOSITORY', '')}/actions
+          """
+          
+          # Create message
+          message = MIMEMultipart('alternative')
+          message['Subject'] = subject
+          message['From'] = smtp_username
+          message['To'] = notification_email
+          
+          # Attach both plain text and HTML versions
+          text_part = MIMEText(text_body, 'plain')
+          html_part = MIMEText(html_body, 'html')
+          message.attach(text_part)
+          message.attach(html_part)
+          
+          # Send email
+          try:
+              print(f"📧 Sending email notification to {notification_email}...")
+              
+              with smtplib.SMTP(smtp_server, smtp_port) as server:
+                  server.starttls()
+                  server.login(smtp_username, smtp_password)
+                  server.send_message(message)
+              
+              print(f"✅ Email notification sent successfully!")
+              print(f"   Subject: {subject}")
+              print(f"   To: {notification_email}")
+              
+          except Exception as e:
+              print(f"❌ Failed to send email: {str(e)}")
+              print(f"   SMTP Server: {smtp_server}:{smtp_port}")
+              print(f"   Username: {smtp_username}")
+              exit(1)
+          EOF
+  
+  manage-workflows:
+    needs: [check-budget, analyze-workflow-usage]
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'schedule' || 
+      github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Determine action based on usage
+        id: determine
+        run: |
+          USAGE=${{ needs.check-budget.outputs.usage }}
+          PERCENTAGE=${{ needs.check-budget.outputs.percentage }}
+          WARNING=${{ env.WARNING_THRESHOLD }}
+          CRITICAL=${{ env.CRITICAL_THRESHOLD }}
+          
+          # Get current date
+          DAY_OF_MONTH=$(date +%d)
+          
+          echo "Current usage: $USAGE minutes ($PERCENTAGE%)"
+          echo "Day of month: $DAY_OF_MONTH"
+          
+          # Auto-enable on 1st of month
+          if [ "$DAY_OF_MONTH" == "01" ]; then
+            echo "action=enable" >> $GITHUB_OUTPUT
+            echo "🔄 First day of month - enabling workflows"
+          # Disable if over critical threshold
+          elif (( $(echo "$USAGE > $CRITICAL" | bc -l) )); then
+            echo "action=disable" >> $GITHUB_OUTPUT
+            echo "🚨 Critical threshold exceeded - disabling workflows"
+          # Manual override
+          elif [ "${{ github.event.inputs.action }}" == "disable_all_workflows" ]; then
+            echo "action=disable" >> $GITHUB_OUTPUT
+            echo "🔧 Manual disable requested"
+          elif [ "${{ github.event.inputs.action }}" == "enable_all_workflows" ]; then
+            echo "action=enable" >> $GITHUB_OUTPUT
+            echo "🔧 Manual enable requested"
+          else
+            echo "action=none" >> $GITHUB_OUTPUT
+            echo "✅ No action needed"
+          fi
+      
+      - name: Disable workflows if over limit
+        if: steps.determine.outputs.action == 'disable'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            console.log('🚫 Disabling workflows to preserve budget...');
+            
+            // Get all workflows
+            const { data: workflows } = await github.rest.actions.listRepoWorkflows({
+              owner,
+              repo
+            });
+            
+            let disabled = 0;
+            
+            for (const workflow of workflows.workflows) {
+              // Skip this budget manager workflow
+              if (workflow.name === 'GitHub Actions Budget Manager') {
+                console.log(`⏭️  Skipping budget manager: ${workflow.name}`);
+                continue;
+              }
+              
+              if (workflow.state === 'active') {
+                try {
+                  await github.rest.actions.disableWorkflow({
+                    owner,
+                    repo,
+                    workflow_id: workflow.id
+                  });
+                  console.log(`✅ Disabled: ${workflow.name}`);
+                  disabled++;
+                  
+                  // Small delay to avoid rate limiting
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                } catch (error) {
+                  console.log(`❌ Failed to disable ${workflow.name}: ${error.message}`);
+                }
+              }
+            }
+            
+            console.log(`\n📊 Disabled ${disabled} workflows`);
+      
+      - name: Enable workflows on new month
+        if: steps.determine.outputs.action == 'enable'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            
+            console.log('✅ Enabling workflows for new billing cycle...');
+            
+            // Get all workflows
+            const { data: workflows } = await github.rest.actions.listRepoWorkflows({
+              owner,
+              repo
+            });
+            
+            let enabled = 0;
+            
+            for (const workflow of workflows.workflows) {
+              if (workflow.state !== 'active') {
+                try {
+                  await github.rest.actions.enableWorkflow({
+                    owner,
+                    repo,
+                    workflow_id: workflow.id
+                  });
+                  console.log(`✅ Enabled: ${workflow.name}`);
+                  enabled++;
+                  
+                  // Small delay to avoid rate limiting
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                } catch (error) {
+                  console.log(`❌ Failed to enable ${workflow.name}: ${error.message}`);
+                }
+              }
+            }
+            
+            console.log(`\n📊 Enabled ${enabled} workflows`);
+  
+  create-report:
+    needs: [check-budget, analyze-workflow-usage, manage-workflows]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Generate comprehensive usage report
+        env:
+          USAGE: ${{ needs.check-budget.outputs.usage }}
+          PERCENTAGE: ${{ needs.check-budget.outputs.percentage }}
+          STATUS: ${{ needs.check-budget.outputs.status }}
+          TOP_WORKFLOWS: ${{ needs.analyze-workflow-usage.outputs.top_workflows }}
+        run: |
+          mkdir -p .github/reports
+          
+          # Parse top workflows
+          echo "$TOP_WORKFLOWS" > /tmp/top_workflows.json
+          
+          cat > .github/reports/usage_report.md << 'EOFMARKER'
+          # GitHub Actions Usage Report
+          
+          **Generated:** $(date '+%Y-%m-%d %H:%M:%S UTC')
+          
+          ## Current Status
+          
+          - **Used Minutes:** ${USAGE} / 2000
+          - **Usage Percentage:** ${PERCENTAGE}%
+          - **Status:** ${STATUS}
+          - **Monthly Limit:** ${{ env.MONTHLY_LIMIT }} minutes
+          - **Can Run Workflows:** ${{ needs.check-budget.outputs.can_run }}
+          
+          ## Thresholds
+          
+          - ⚠️ Warning: ${{ env.WARNING_THRESHOLD }} minutes (75%)
+          - 🚨 Critical: ${{ env.CRITICAL_THRESHOLD }} minutes (90%)
+          - 🛑 Hard Limit: ${{ env.MONTHLY_LIMIT }} minutes (95%)
+          
+          ## Top 5 Workflow Consumers (Last 30 Days)
+          
+          EOFMARKER
+          
+          # Add workflow usage table
+          if [ -f /tmp/top_workflows.json ]; then
+            python3 << 'EOF'
+          import json
+          
+          try:
+              with open('/tmp/top_workflows.json', 'r') as f:
+                  workflows = json.load(f)
+              
+              if workflows:
+                  print("\n| Rank | Workflow | Total Minutes | Avg Minutes | Runs | Failed |")
+                  print("|------|----------|---------------|-------------|------|--------|")
+                  
+                  for idx, wf in enumerate(workflows, 1):
+                      print(f"| {idx} | {wf['name']} | {wf['totalMinutes']} | {wf['avgMinutes']} | {wf['runs']} | {wf['failedRuns']} |")
+              else:
+                  print("\nNo workflow usage data available.")
+          except:
+              print("\nCould not parse workflow data.")
+          EOF
+          fi >> .github/reports/usage_report.md
+          
+          cat >> .github/reports/usage_report.md << 'EOFMARKER'
+          
+          ## Automatic Actions
+          
+          - Workflows are automatically **disabled** when usage exceeds critical threshold (90%)
+          - Workflows are automatically **re-enabled** on the 1st of each month
+          - Usage is checked every 6 hours
+          - Email notifications sent at warning (75%) and critical (90%) levels
+          
+          ## Email Notifications
+          
+          Email alerts are sent to: ${NOTIFICATION_EMAIL:-'Not configured'}
+          
+          Configure email notifications by setting these repository secrets:
+          - `NOTIFICATION_EMAIL` - Recipient email address
+          - `SMTP_USERNAME` - SMTP login username
+          - `SMTP_PASSWORD` - SMTP login password
+          
+          ---
+          *Last updated: $(date -u)*
+          EOFMARKER
+          
+          cat .github/reports/usage_report.md
+      
+      - name: Commit usage report
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add .github/reports/
+          git commit -m "Update usage reports [skip ci]" || echo "No changes"
+          git push || echo "Nothing to push"
+  
+  notify:
+    needs: [check-budget, analyze-workflow-usage, manage-workflows]
+    runs-on: ubuntu-latest
+    if: |
+      always() && 
+      (needs.check-budget.outputs.percentage > 75 || 
+       github.event.inputs.action == 'get_usage_report')
+    
+    steps:
+      - name: Create notification issue
+        uses: actions/github-script@v7
+        env:
+          TOP_WORKFLOWS: ${{ needs.analyze-workflow-usage.outputs.top_workflows }}
+        with:
+          script: |
+            const usage = '${{ needs.check-budget.outputs.usage }}';
+            const percentage = '${{ needs.check-budget.outputs.percentage }}';
+            const canRun = '${{ needs.check-budget.outputs.can_run }}';
+            const limit = process.env.MONTHLY_LIMIT;
+            const warning = process.env.WARNING_THRESHOLD;
+            const critical = process.env.CRITICAL_THRESHOLD;
+            const topWorkflowsJson = process.env.TOP_WORKFLOWS;
+            
+            let topWorkflows = [];
+            try {
+              topWorkflows = JSON.parse(topWorkflowsJson);
+            } catch (e) {
+              console.log('Could not parse workflow data');
+            }
+            
+            // Build workflow usage table
+            let workflowTable = '';
+            if (topWorkflows.length > 0) {
+              workflowTable = '\n### 📊 Top 5 Workflow Consumers (Last 30 Days)\n\n';
+              workflowTable += '| Rank | Workflow | Total Min | Avg Min | Runs | Failed |\n';
+              workflowTable += '|------|----------|-----------|---------|------|--------|\n';
+              
+              topWorkflows.forEach((wf, idx) => {
+                workflowTable += `| ${idx + 1} | **${wf.name}** | ${wf.totalMinutes} | ${wf.avgMinutes} | ${wf.runs} | ${wf.failedRuns} |\n`;
+              });
+            }
+            
+            let title, body, labels;
+            
+            if (parseFloat(percentage) >= 90) {
+              title = '🚨 CRITICAL: GitHub Actions Usage at ' + percentage + '%';
+              labels = ['critical', 'budget', 'automated'];
+              body = `## 🚨 Critical Usage Alert
+              
+              Your GitHub Actions usage has reached **${percentage}%** of the monthly limit!
+              
+              **Current Usage:** ${usage} / 2000 minutes
+              **Monthly Limit:** ${limit} minutes
+              **Workflows Status:** ${canRun === 'true' ? '✅ Active' : '🚫 DISABLED'}
+              
+              ${workflowTable}
+              
+              ### 🔧 Optimization Recommendations
+              
+              1. **Review top consuming workflows** - Focus on the workflows listed above
+              2. **Reduce workflow frequency** - Consider running less frequently
+              3. **Optimize long-running jobs** - Break into smaller, parallel jobs
+              4. **Cancel redundant runs** - Use concurrency groups to cancel old runs
+              5. **Check failed runs** - Failed runs still consume minutes
+              
+              ### Automatic Actions Taken
+              
+              ${canRun === 'true' ? 
+                '⚠️ Workflows are still running but will be disabled soon!' : 
+                '✅ All workflows have been automatically disabled to preserve budget.'}
+              
+              ### ⚡ Next Steps
+              
+              1. **Automatic Recovery:** Workflows will automatically re-enable on the 1st of next month
+              2. **Email Sent:** Notification email dispatched to ${process.env.NOTIFICATION_EMAIL || 'configured address'}
+              3. **Review Usage:** Check the [Actions dashboard](https://github.com/${context.repo.owner}/${context.repo.repo}/actions) for details
+              4. **Optimize Workflows:** Focus on the top consumers listed above
+              5. **Monitor Reports:** Check \`.github/reports/\` for detailed usage analysis
+              
+              ### 🔧 Manual Controls
+              
+              You can manually manage workflows at any time:
+              - **Disable All:** Run this workflow with \`disable_all_workflows\` action
+              - **Enable All:** Run this workflow with \`enable_all_workflows\` action  
+              - **Check Status:** Run with \`check_budget\` action
+              - **View Analysis:** Run with \`analyze_workflow_usage\` action
+              
+              ### 📧 Email Notifications
+              
+              **Status:** ${process.env.NOTIFICATION_EMAIL ? '✅ Configured' : '⚠️ Not configured'}
+              ${process.env.NOTIFICATION_EMAIL ? `**Recipient:** ${process.env.NOTIFICATION_EMAIL}` : ''}
+              
+              ${!process.env.NOTIFICATION_EMAIL ? `**To enable email alerts, set these secrets:**
+              - \`NOTIFICATION_EMAIL\` - Your email address
+              - \`SMTP_USERNAME\` - SMTP login (e.g., Gmail address)
+              - \`SMTP_PASSWORD\` - SMTP password or app-specific password` : ''}
+              
+              ---
+              *This issue was automatically created by the GitHub Actions Budget Manager*
+              `;
+              
+            } else {
+              title = '⚠️ WARNING: GitHub Actions Usage at ' + percentage + '%';
+              labels = ['warning', 'budget', 'automated'];
+              body = `## ⚠️ Usage Warning
+              
+              Your GitHub Actions usage has reached **${percentage}%** of the monthly limit.
+              
+              **Current Usage:** ${usage} / 2000 minutes
+              **Monthly Limit:** ${limit} minutes
+              **Warning Threshold:** ${warning} minutes (75%)
+              **Critical Threshold:** ${critical} minutes (90%)
+              **Workflows Status:** ✅ Active
+              
+              ${workflowTable}
+              
+              ### 💡 Recommendations
+              
+              Take action now to avoid hitting the critical threshold:
+              
+              1. **Review Top Consumers** - Check the workflows listed above
+              2. **Optimize Long Jobs** - Look for ways to reduce execution time
+              3. **Reduce Frequency** - Consider running less critical workflows less often
+              4. **Use Caching** - Implement caching to speed up jobs
+              5. **Cancel Redundant Runs** - Configure concurrency groups
+              
+              ### ⚡ Next Steps
+              
+              1. **Monitor Usage:** This workflow checks usage every 6 hours
+              2. **Email Alert:** Notification sent to ${process.env.NOTIFICATION_EMAIL || 'configured address'}
+              3. **Review Dashboard:** [View Actions usage](https://github.com/${context.repo.owner}/${context.repo.repo}/actions)
+              4. **Automatic Protection:** Workflows will auto-disable at 90% usage
+              5. **Auto-Recovery:** Workflows re-enable on the 1st of each month
+              
+              ### 🔧 Manual Controls
+              
+              Manage workflows manually via workflow dispatch:
+              - **Check Budget:** \`check_budget\` - Get current status
+              - **Disable All:** \`disable_all_workflows\` - Stop all workflows
+              - **Enable All:** \`enable_all_workflows\` - Restart workflows
+              - **Analyze Usage:** \`analyze_workflow_usage\` - Detailed breakdown
+              
+              ### 📧 Email Notifications
+              
+              **Status:** ${process.env.NOTIFICATION_EMAIL ? '✅ Configured' : '⚠️ Not configured'}
+              ${process.env.NOTIFICATION_EMAIL ? `**Recipient:** ${process.env.NOTIFICATION_EMAIL}` : ''}
+              
+              ${!process.env.NOTIFICATION_EMAIL ? `**To enable email alerts:**
+              Add these secrets to your repository:
+              - \`NOTIFICATION_EMAIL\` - Email to receive alerts
+              - \`SMTP_USERNAME\` - SMTP username (e.g., your Gmail)
+              - \`SMTP_PASSWORD\` - SMTP password or app password` : ''}
+              
+              ---
+              *Automated notification from GitHub Actions Budget Manager*
+              `;
+            }
+            
+            // Check for existing open issues
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'budget',
+              per_page: 100
+            });
+            
+            // Close old budget issues
+            for (const issue of issues) {
+              if (issue.title.includes('GitHub Actions Usage')) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed'
+                });
+                console.log(`Closed old issue #${issue.number}`);
+              }
+            }
+            
+            // Create new issue
+            const { data: newIssue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: labels
+            });
+            
+            console.log(`Created issue #${newIssue.number}: ${title}`);
+              
+              

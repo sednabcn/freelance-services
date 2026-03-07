@@ -19,7 +19,7 @@
 ## Top 5 Workflow Consumers (Last 30 Days)
 
 
-No workflow usage data available.
+Could not parse workflow data.
 
 ## Automatic Actions
 

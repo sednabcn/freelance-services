@@ -11,10 +11,10 @@
 
 ## 📊 Latest Scan Results
 
-    **Last Updated:** 2026-11-07 15:34 UTC
+    **Last Updated:** 2026-11-07 20:45 UTC
 
     - 🎯 **Opportunities Found:** 50
-    - ✅ **Matched to Profile:** 29
+    - ✅ **Matched to Profile:** 27
     - 💼 **Business Models:** 0
 
     
